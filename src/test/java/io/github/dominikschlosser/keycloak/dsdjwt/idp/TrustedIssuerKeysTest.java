@@ -43,11 +43,11 @@ import org.keycloak.util.JsonSerialization;
 class TrustedIssuerKeysTest {
 
     private static final String ACME = "https://register.acme.example";
-    private static final String BOLT = "https://register.bolt.example";
-    /** A hosted issuance service runs the issuers of Acme and Bolt on 1 host. */
+    private static final String SUPPLIER = "https://register.supplier.example";
+    /** A hosted issuance service runs the issuers of Acme and a supplier on 1 host. */
     private static final String ACME_TENANT = "https://issue.example/acme";
 
-    private static final String BOLT_TENANT = "https://issue.example/bolt";
+    private static final String SUPPLIER_TENANT = "https://issue.example/supplier";
 
     private static TestCertificates ca;
     private static KeyWrapper acmeKey;
@@ -92,7 +92,7 @@ class TrustedIssuerKeysTest {
 
     @Test
     void refusesUriNameOfAnotherIssuerOnTheSameHost() throws Exception {
-        X509Certificate leaf = ca.issue("Bolt Supplies B.V.", acmeKey, TestCertificates.uri(BOLT_TENANT));
+        X509Certificate leaf = ca.issue("Supplier B.V.", acmeKey, TestCertificates.uri(SUPPLIER_TENANT));
 
         ChainException e = assertThrows(ChainException.class, () -> keys().resolve(header(leaf), ACME_TENANT));
 
@@ -112,7 +112,7 @@ class TrustedIssuerKeysTest {
                 "https://issue.example#acme"
             })
     void refusesDnsNameForAnIssuerThatIsNotABareHost(String issuer) throws Exception {
-        X509Certificate leaf = ca.issue("Bolt Supplies B.V.", acmeKey, TestCertificates.dns("issue.example"));
+        X509Certificate leaf = ca.issue("Supplier B.V.", acmeKey, TestCertificates.dns("issue.example"));
 
         ChainException e = assertThrows(ChainException.class, () -> keys().resolve(header(leaf), issuer));
 
@@ -123,7 +123,7 @@ class TrustedIssuerKeysTest {
 
     @Test
     void refusesLeafOfAnotherIssuerUnderTheSameCa() throws Exception {
-        X509Certificate leaf = ca.issue("Bolt Supplies B.V.", acmeKey, TestCertificates.uri(BOLT));
+        X509Certificate leaf = ca.issue("Supplier B.V.", acmeKey, TestCertificates.uri(SUPPLIER));
 
         ChainException e = assertThrows(ChainException.class, () -> keys().resolve(header(leaf), ACME));
 

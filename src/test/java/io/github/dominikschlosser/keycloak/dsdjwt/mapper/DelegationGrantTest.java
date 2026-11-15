@@ -31,11 +31,11 @@ import org.keycloak.representations.IDToken;
 class DelegationGrantTest {
 
     @ParameterizedTest
-    @ValueSource(strings = {"sub", "act", "exp", "preferred_username", "azp", "acme_tenant.id"})
+    @ValueSource(strings = {"sub", "act", "exp", "preferred_username", "azp", "acme_tenant.id", "aud", "cnf.jkt"})
     void refusesClaimTheTokenHolds(String claim) {
         DelegationGrant grant = new DelegationGrant();
         grant.addClaim("limit", "limit", "2500.00");
-        grant.addClaim("spoof", claim, "urn:eudi-test:agent:bolt");
+        grant.addClaim("spoof", claim, "urn:eudi-test:agent:spoofed");
         AccessToken token = token();
 
         ConfigurationException e = assertThrows(ConfigurationException.class, () -> grant.applyClaims(token));

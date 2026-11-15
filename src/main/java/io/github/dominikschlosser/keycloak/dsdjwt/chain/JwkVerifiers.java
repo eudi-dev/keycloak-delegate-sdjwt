@@ -71,6 +71,10 @@ public final class JwkVerifiers {
         if (!jwk.isObject()) {
             throw new ChainException(owner + " has no cnf claim with a jwk");
         }
+        // RFC 7800 §3.2: the jwk member holds a public key. A private key here means it leaked.
+        if (jwk.has("d")) {
+            throw new ChainException(owner + " has a private key in its cnf claim");
+        }
         try {
             return JsonSerialization.mapper.convertValue(jwk, JWK.class);
         } catch (IllegalArgumentException e) {

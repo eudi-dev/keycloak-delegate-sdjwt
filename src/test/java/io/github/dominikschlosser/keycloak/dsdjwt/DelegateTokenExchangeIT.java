@@ -80,7 +80,7 @@ class DelegateTokenExchangeIT {
     private static StatusListServer statusList;
     private static String baseUrl;
     private static String realmIssuer;
-    private static final String COLLIDING_PRINCIPAL = "BOLT.HRB9";
+    private static final String COLLIDING_PRINCIPAL = "DETEST.HRB9";
 
     @BeforeAll
     @SuppressWarnings("resource")

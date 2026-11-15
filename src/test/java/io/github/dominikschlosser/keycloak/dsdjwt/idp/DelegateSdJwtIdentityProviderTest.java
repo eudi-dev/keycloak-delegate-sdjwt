@@ -41,32 +41,32 @@ import org.keycloak.util.JsonSerialization;
 class DelegateSdJwtIdentityProviderTest {
 
     private static final String ACME = "https://register.acme.example";
-    private static final String BOLT = "https://register.bolt.example";
+    private static final String SUPPLIER = "https://register.supplier.example";
     private static final String STUB_TRUST = "stub-trust";
 
     private static KeyWrapper acmeKey;
-    private static KeyWrapper boltKey;
+    private static KeyWrapper supplierKey;
     private static DelegateSdJwtIdentityProvider provider;
 
     @BeforeAll
     static void trustTwoIssuers() throws Exception {
         CryptoIntegration.init(DelegateSdJwtIdentityProviderTest.class.getClassLoader());
         acmeKey = ChainBuilder.ecKey();
-        boltKey = ChainBuilder.ecKey();
+        supplierKey = ChainBuilder.ecKey();
         DelegateSdJwtIdentityProviderConfig config = new DelegateSdJwtIdentityProviderConfig();
         config.setAlias("delegation");
         config.setConfig(Map.of(
                 "trustedIssuerJwks",
                 JsonSerialization.writeValueAsString(Map.of(
                         ACME, Map.of("keys", List.of(ChainBuilder.publicJwk(acmeKey))),
-                        BOLT, Map.of("keys", List.of(ChainBuilder.publicJwk(boltKey)))))));
+                        SUPPLIER, Map.of("keys", List.of(ChainBuilder.publicJwk(supplierKey)))))));
         provider = new DelegateSdJwtIdentityProvider(null, config);
     }
 
     @Test
     void resolvesOnlyTheKeysOfTheCredentialIssuer() {
         assertEquals(List.of(x(acmeKey)), keys(ACME));
-        assertEquals(List.of(x(boltKey)), keys(BOLT));
+        assertEquals(List.of(x(supplierKey)), keys(SUPPLIER));
     }
 
     @Test
@@ -79,17 +79,17 @@ class DelegateSdJwtIdentityProviderTest {
     void resolvesTrustMaterialKeysOnlyFromAnIdentityProviderWhoseIssuerIsTheCredentialIssuer() {
         Map<String, IdentityProviderModel> models = Map.of(
                 "acme-trust", trustModel("acme-trust", ACME, true),
-                "bolt-trust", trustModel("bolt-trust", null, true),
+                "supplier-trust", trustModel("supplier-trust", null, true),
                 "crate-trust", trustModel("crate-trust", "https://register.crate.example", false));
-        Map<String, KeyWrapper> trustKeys = Map.of("acme-trust", acmeKey, "bolt-trust", boltKey);
+        Map<String, KeyWrapper> trustKeys = Map.of("acme-trust", acmeKey, "supplier-trust", supplierKey);
         DelegateSdJwtIdentityProviderConfig config = new DelegateSdJwtIdentityProviderConfig();
         config.setAlias("delegation");
-        config.setConfig(Map.of("trustMaterialIdps", "acme-trust,bolt-trust,crate-trust"));
+        config.setConfig(Map.of("trustMaterialIdps", "acme-trust,supplier-trust,crate-trust"));
         DelegateSdJwtIdentityProvider trustMaterial =
                 new DelegateSdJwtIdentityProvider(session(models, trustKeys), config);
 
         assertEquals(List.of(x(acmeKey)), keys(trustMaterial, ACME));
-        assertEquals(List.of(), keys(trustMaterial, BOLT));
+        assertEquals(List.of(), keys(trustMaterial, SUPPLIER));
         assertEquals(List.of(), keys(trustMaterial, "https://register.crate.example"));
     }
 

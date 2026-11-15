@@ -20,7 +20,7 @@ A Disclosure can also sit inside the value, for example for the `amount` of `man
 
 ## Consequences
 
-A mapper must not set a claim that the finished token already holds, such as `sub`, `act` or `azp`. 2 mappers must not set the same claim. Both give `server_error`.
+A mapper must not set a claim that the finished token already holds, such as `sub`, `act` or `azp`. It must not set `aud` or `cnf` either, because they bind the token to an audience or a key. 2 mappers must not set the same claim. Both give `server_error`.
 
 A mapper may grant an admin role only when the identity provider allows admin role mapping. Otherwise the exchange gives `server_error`.
 

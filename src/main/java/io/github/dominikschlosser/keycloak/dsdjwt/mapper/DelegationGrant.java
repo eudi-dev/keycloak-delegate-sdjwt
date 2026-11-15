@@ -35,6 +35,12 @@ import org.keycloak.utils.JsonUtils;
 /** The roles and claims the mappers grant for one delegation. */
 public final class DelegationGrant {
 
+    /**
+     * Claims that bind the token to an audience or a key (RFC 7519 §4.1.3, RFC 7800 §3). A token may
+     * lack them, so the check against the claims the token holds does not cover them.
+     */
+    private static final Set<String> BINDING_CLAIMS = Set.of("aud", "cnf");
+
     private record Claim(String mapperName, Object value) {}
 
     private final Set<RoleModel> roles = new LinkedHashSet<>();
@@ -60,13 +66,13 @@ public final class DelegationGrant {
 
     /**
      * Adds the claims to a token that holds everything else already. A claim whose top level name the
-     * token holds throws a ConfigurationException before any claim is added.
+     * token holds, or aud or cnf, throws a ConfigurationException before any claim is added.
      */
     public void applyClaims(IDToken token) {
         JsonNode present = JsonSerialization.mapper.valueToTree(token);
         claims.forEach((claim, granted) -> {
             String name = JsonUtils.splitClaimPath(claim).get(0);
-            if (present.has(name)) {
+            if (present.has(name) || BINDING_CLAIMS.contains(name)) {
                 throw new ConfigurationException(
                         "mapper " + granted.mapperName() + " must not set the claim " + name + " of the token");
             }

@@ -187,11 +187,12 @@ class StatusListCheckerTest {
     @Test
     void refusesTokenOfAnotherIssuer() {
         ObjectNode claims = statusList(1, 0);
-        claims.put("iss", "https://register.bolt.example");
+        claims.put("iss", "https://register.supplier.example");
         tokens.put(URI, token(claims));
 
         assertRefused(
-                "the status list token has iss \"https://register.bolt.example\", but the credential has iss " + ISSUER,
+                "the status list token has iss \"https://register.supplier.example\", but the credential has iss "
+                        + ISSUER,
                 credential(URI, 0));
         assertEquals(List.of(), resolvedIssuers);
     }
@@ -234,7 +235,7 @@ class StatusListCheckerTest {
     @Test
     void refusesAListSignerUnderTheSameCaThatNamesAnotherIssuer() {
         X509Certificate leaf =
-                ca.issue("Bolt Supplies B.V.", issuer, TestCertificates.uri("https://register.bolt.example"));
+                ca.issue("Supplier B.V.", issuer, TestCertificates.uri("https://register.supplier.example"));
         tokens.put(URI, ChainBuilder.sign(issuer, "statuslist+jwt", statusList(1, 0), List.of(leaf)));
 
         ChainException e =

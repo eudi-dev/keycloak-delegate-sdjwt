@@ -346,8 +346,8 @@ class ChainVerifierTest {
     @Test
     void refusesTheWrongAudience() {
         assertRefused(
-                b -> b.links(1, "invoice.approve").keyBindingClaims.put("aud", "https://iam.bolt.example/realms/x"),
-                "the Key Binding JWT has aud https://iam.bolt.example/realms/x, expected " + AUDIENCE);
+                b -> b.links(1, "invoice.approve").keyBindingClaims.put("aud", "https://iam.supplier.example/realms/x"),
+                "the Key Binding JWT has aud https://iam.supplier.example/realms/x, expected " + AUDIENCE);
     }
 
     @Test
@@ -402,6 +402,19 @@ class ChainVerifierTest {
         assertRefused(
                 b -> b.links(1, "invoice.approve").link(1).withCnf = false,
                 "the Delegate Payload of KB-SD-JWT 1 has no cnf claim with a jwk");
+    }
+
+    @Test
+    void refusesADelegatePayloadWithAPrivateKeyInCnf() {
+        assertRefused(
+                b -> {
+                    ChainBuilder.Link link = b.links(1, "invoice.approve").link(1);
+                    link.withCnf = false;
+                    ObjectNode jwk = JsonSerialization.mapper.valueToTree(ChainBuilder.publicJwk(link.agent));
+                    jwk.put("d", "c2VjcmV0");
+                    link.delegatePayload.putObject("cnf").set("jwk", jwk);
+                },
+                "the Delegate Payload of KB-SD-JWT 1 has a private key in its cnf claim");
     }
 
     @Test

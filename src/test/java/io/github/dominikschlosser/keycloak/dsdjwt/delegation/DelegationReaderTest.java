@@ -150,7 +150,7 @@ class DelegationReaderTest {
                 .delegatePayload
                 .withObjectProperty("mandate")
                 .putArray("audiences")
-                .add("https://erp.bolt.example");
+                .add("https://erp.supplier.example");
 
         ChainException e =
                 assertThrows(ChainException.class, () -> read(builder, settings(AUDIENCES, CREDENTIAL_TYPES)));

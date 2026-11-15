@@ -35,7 +35,7 @@ class ClaimMapperTest {
 
     private static final String PAYLOAD = """
             {"mandate": {"limit": {"amount": 2500, "currency": "EUR"},
-                         "suppliers": ["Bolt Supplies B.V."]}}""";
+                         "suppliers": ["Supplier B.V."]}}""";
 
     private final ClaimMapper mapper = new ClaimMapper();
 
@@ -56,7 +56,7 @@ class ClaimMapperTest {
         assertEquals(
                 Map.of("amount", 2500, "currency", "EUR"),
                 limit.getOtherClaims().get("limit"));
-        assertEquals(List.of("Bolt Supplies B.V."), suppliers.getOtherClaims().get("suppliers"));
+        assertEquals(List.of("Supplier B.V."), suppliers.getOtherClaims().get("suppliers"));
     }
 
     @Test
