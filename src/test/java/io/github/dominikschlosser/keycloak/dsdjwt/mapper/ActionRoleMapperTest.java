@@ -37,8 +37,8 @@ class ActionRoleMapperTest {
         mapper.map(
                 null,
                 null,
-                mapper("pay", Map.of("action", "invoice:pay", "role", "invoice-payer")),
-                delegation(Set.of("order:create"), "{}"),
+                mapper("approve", Map.of("action", "invoice.approve", "role", "invoice-approver")),
+                delegation(Set.of("order.create"), "{}"),
                 grant);
 
         assertTrue(grant.roles().isEmpty());
@@ -51,8 +51,8 @@ class ActionRoleMapperTest {
                 () -> mapper.map(
                         null,
                         null,
-                        mapper("pay", Map.of("role", "invoice-payer")),
-                        delegation(Set.of("invoice:pay"), "{}"),
+                        mapper("approve", Map.of("role", "invoice-approver")),
+                        delegation(Set.of("invoice.approve"), "{}"),
                         new DelegationGrant()));
     }
 }

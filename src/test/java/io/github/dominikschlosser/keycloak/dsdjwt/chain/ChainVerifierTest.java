@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.dominikschlosser.keycloak.dsdjwt.ChainBuilder;
-import io.github.dominikschlosser.keycloak.dsdjwt.TestVectors;
+import io.github.dominikschlosser.keycloak.dsdjwt.SampleChains;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPublicKey;
@@ -60,48 +60,48 @@ class ChainVerifierTest {
 
     @ParameterizedTest
     @ValueSource(ints = {1, 2, 4})
-    void acceptsTheGoVectors(int links) throws Exception {
-        JsonNode vector = TestVectors.read("chain-" + links + "-links.json");
+    void acceptsTheGoSampleChains(int links) throws Exception {
+        JsonNode sample = SampleChains.read("chain-" + links + "-links.json");
 
         VerifiedChain chain = verifier(
-                        TestVectors.jwk(vector.get("issuer_jwk")),
-                        vector.get("now").asLong())
-                .verify(vector.get("chain").asText(), vector.get("audience").asText());
+                        SampleChains.jwk(sample.get("issuer_jwk")),
+                        sample.get("now").asLong())
+                .verify(sample.get("chain").asText(), sample.get("audience").asText());
 
         assertEquals(links, chain.links().size());
-        assertEquals(vector.get("nonce").asText(), chain.nonce());
+        assertEquals(sample.get("nonce").asText(), chain.nonce());
         assertEquals("DEACME.HRB4711", chain.credential().get("euid_reference").asText());
         List<String> agents = new ArrayList<>();
         chain.links()
                 .forEach(link ->
                         agents.add(link.delegatePayload().at("/agent/id").asText()));
-        assertEquals(agentsOf(vector), agents);
+        assertEquals(agentsOf(sample), agents);
         assertEquals(
-                "Pay supplier invoices of Bolt Supplies B.V.",
+                "Approve supplier invoices of Bolt Supplies B.V.",
                 chain.links().get(0).delegatePayload().at("/mandate/purpose").asText());
     }
 
     @Test
-    void refusesTheGoVectorWith5Links() {
-        JsonNode vector = TestVectors.read("chain-5-links.json");
+    void refusesTheGoSampleChainWith5Links() {
+        JsonNode sample = SampleChains.read("chain-5-links.json");
 
         ChainException e = assertThrows(ChainException.class, () -> verifier(
-                        TestVectors.jwk(vector.get("issuer_jwk")),
-                        vector.get("now").asLong())
-                .verify(vector.get("chain").asText(), vector.get("audience").asText()));
+                        SampleChains.jwk(sample.get("issuer_jwk")),
+                        sample.get("now").asLong())
+                .verify(sample.get("chain").asText(), sample.get("audience").asText()));
 
         assertEquals("the chain has 5 KB-SD-JWTs, but at most 4 are accepted", e.getMessage());
     }
 
     @Test
-    void acceptsTheGoldenVectorOfEudiBusiness() throws Exception {
-        JsonNode vector = TestVectors.read("golden-chain.json");
-        JsonNode expected = vector.at("/verifier");
+    void acceptsTheGoldenChainOfEudiBusiness() throws Exception {
+        JsonNode sample = SampleChains.read("golden-chain.json");
+        JsonNode expected = sample.at("/verifier");
 
         VerifiedChain chain = verifier(
-                        TestVectors.jwk(vector.at("/keys/issuer")),
+                        SampleChains.jwk(sample.at("/keys/issuer")),
                         expected.get("time").asLong())
-                .verify(vector.get("token").asText(), expected.get("audience").asText());
+                .verify(sample.get("token").asText(), expected.get("audience").asText());
 
         assertEquals(expected.get("nonce").asText(), chain.nonce());
         assertEquals(1, chain.links().size());
@@ -561,7 +561,7 @@ class ChainVerifierTest {
         VerifiedChain chain = verify(builder);
 
         assertEquals(
-                "5000.00",
+                "2500.00",
                 chain.links()
                         .get(0)
                         .delegatePayload()
@@ -649,9 +649,9 @@ class ChainVerifierTest {
         Time.setOffset((int) (now - System.currentTimeMillis() / 1000));
     }
 
-    private static List<String> agentsOf(JsonNode vector) {
+    private static List<String> agentsOf(JsonNode sample) {
         List<String> agents = new ArrayList<>();
-        vector.get("agents").forEach(agent -> agents.add(agent.asText()));
+        sample.get("agents").forEach(agent -> agents.add(agent.asText()));
         return agents;
     }
 }

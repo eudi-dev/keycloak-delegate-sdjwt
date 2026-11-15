@@ -34,7 +34,7 @@ import org.keycloak.representations.AccessToken;
 class ClaimMapperTest {
 
     private static final String PAYLOAD = """
-            {"mandate": {"limit": {"amount": 5000, "currency": "EUR"},
+            {"mandate": {"limit": {"amount": 2500, "currency": "EUR"},
                          "suppliers": ["Bolt Supplies B.V."]}}""";
 
     private final ClaimMapper mapper = new ClaimMapper();
@@ -52,9 +52,9 @@ class ClaimMapperTest {
         AccessToken limit = map(Map.of("source", "mandate.limit", "claim.name", "limit"), PAYLOAD);
         AccessToken suppliers = map(Map.of("source", "mandate.suppliers", "claim.name", "suppliers"), PAYLOAD);
 
-        assertEquals(5000, amount.getOtherClaims().get("limit_amount"));
+        assertEquals(2500, amount.getOtherClaims().get("limit_amount"));
         assertEquals(
-                Map.of("amount", 5000, "currency", "EUR"),
+                Map.of("amount", 2500, "currency", "EUR"),
                 limit.getOtherClaims().get("limit"));
         assertEquals(List.of("Bolt Supplies B.V."), suppliers.getOtherClaims().get("suppliers"));
     }
@@ -63,7 +63,7 @@ class ClaimMapperTest {
     void nestsClaimAtDottedName() throws Exception {
         AccessToken token = map(Map.of("source", "mandate.limit.amount", "claim.name", "mandate.max_amount"), PAYLOAD);
 
-        assertEquals(Map.of("max_amount", 5000), token.getOtherClaims().get("mandate"));
+        assertEquals(Map.of("max_amount", 2500), token.getOtherClaims().get("mandate"));
     }
 
     @Test

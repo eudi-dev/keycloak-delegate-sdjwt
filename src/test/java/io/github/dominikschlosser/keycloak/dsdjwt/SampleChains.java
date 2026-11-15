@@ -23,15 +23,15 @@ import java.io.UncheckedIOException;
 import org.keycloak.jose.jwk.JWK;
 import org.keycloak.util.JsonSerialization;
 
-/** Reads the vectors in src/test/resources/vectors. tools/vectorgen writes them with the eudi-dev Go library. */
-public final class TestVectors {
+/** Reads the sample chains in src/test/resources/sample-chains. tools/samplechains writes them with the eudi-dev Go library. */
+public final class SampleChains {
 
-    private TestVectors() {}
+    private SampleChains() {}
 
     public static JsonNode read(String name) {
-        try (InputStream in = TestVectors.class.getResourceAsStream("/vectors/" + name)) {
+        try (InputStream in = SampleChains.class.getResourceAsStream("/sample-chains/" + name)) {
             if (in == null) {
-                throw new IllegalArgumentException("no vector " + name);
+                throw new IllegalArgumentException("no sample chain " + name);
             }
             return JsonSerialization.mapper.readTree(in);
         } catch (IOException e) {

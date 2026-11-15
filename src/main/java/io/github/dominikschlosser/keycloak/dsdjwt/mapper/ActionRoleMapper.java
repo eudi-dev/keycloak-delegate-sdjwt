@@ -41,7 +41,7 @@ public class ActionRoleMapper extends AbstractIdentityProviderMapper implements 
             .property()
             .name(ACTION)
             .label("Action")
-            .helpText("Delegated action that grants the role, for example invoice:pay.")
+            .helpText("Delegated action that grants the role, for example invoice.approve.")
             .type(ProviderConfigProperty.STRING_TYPE)
             .required(true)
             .add()

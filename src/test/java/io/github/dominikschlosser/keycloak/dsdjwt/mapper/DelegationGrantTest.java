@@ -34,7 +34,7 @@ class DelegationGrantTest {
     @ValueSource(strings = {"sub", "act", "exp", "preferred_username", "azp", "acme_tenant.id"})
     void refusesClaimTheTokenHolds(String claim) {
         DelegationGrant grant = new DelegationGrant();
-        grant.addClaim("limit", "limit", "5000.00");
+        grant.addClaim("limit", "limit", "2500.00");
         grant.addClaim("spoof", claim, "urn:eudi-test:agent:bolt");
         AccessToken token = token();
 
@@ -47,14 +47,14 @@ class DelegationGrantTest {
     @Test
     void nestsClaimsOfSeveralMappersUnderOneName() {
         DelegationGrant grant = new DelegationGrant();
-        grant.addClaim("amount", "mandate.max_amount", 5000);
+        grant.addClaim("amount", "mandate.max_amount", 2500);
         grant.addClaim("currency", "mandate.currency", "EUR");
         AccessToken token = token();
 
         grant.applyClaims(token);
 
         assertEquals(
-                Map.of("max_amount", 5000, "currency", "EUR"),
+                Map.of("max_amount", 2500, "currency", "EUR"),
                 token.getOtherClaims().get("mandate"));
     }
 

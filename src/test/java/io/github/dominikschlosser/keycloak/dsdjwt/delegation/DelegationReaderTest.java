@@ -54,14 +54,14 @@ class DelegationReaderTest {
 
     @Test
     void readsPrincipalActionsAndActorOfTwoLinks() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay", "order:create");
-        builder.links(1, "invoice:pay", "report:read");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve", "order.create");
+        builder.links(1, "invoice.approve", "invoice.read");
 
         Delegation delegation = read(builder, settings(AUDIENCES, CREDENTIAL_TYPES));
 
         assertEquals("https://register.example", delegation.issuer());
         assertEquals(PRINCIPAL, delegation.principal());
-        assertEquals(Set.of("invoice:pay"), delegation.actions());
+        assertEquals(Set.of("invoice.approve"), delegation.actions());
         assertEquals(
                 Map.of(
                         "sub",
@@ -75,15 +75,15 @@ class DelegationReaderTest {
 
     @Test
     void acceptsSingleTextAction() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay");
-        builder.link(1).delegatePayload.withObjectProperty("mandate").put("actions", "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
+        builder.link(1).delegatePayload.withObjectProperty("mandate").put("actions", "invoice.approve");
 
-        assertEquals(Set.of("invoice:pay"), read(builder, defaults()).actions());
+        assertEquals(Set.of("invoice.approve"), read(builder, defaults()).actions());
     }
 
     @Test
     void treatsMissingActionsAsNone() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
         builder.link(1).delegatePayload.withObjectProperty("mandate").remove("actions");
 
         assertEquals(Set.of(), read(builder, defaults()).actions());
@@ -91,15 +91,15 @@ class DelegationReaderTest {
 
     @Test
     void keepsOnlyTheActionsTheCredentialAllows() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay", "order:create");
-        builder.credentialActions.removeAll().add("invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve", "order.create");
+        builder.credentialActions.removeAll().add("invoice.approve");
 
-        assertEquals(Set.of("invoice:pay"), read(builder, defaults()).actions());
+        assertEquals(Set.of("invoice.approve"), read(builder, defaults()).actions());
     }
 
     @Test
     void treatsMissingCredentialActionsAsNone() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
         builder.credentialDisclosures.remove("authorisation");
 
         assertEquals(Set.of(), read(builder, defaults()).actions());
@@ -123,7 +123,7 @@ class DelegationReaderTest {
 
     @Test
     void usesKeyThumbprintWithoutAgentId() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
         builder.link(1).delegatePayload.remove("agent");
 
         Delegation delegation = read(builder, defaults());
@@ -135,7 +135,7 @@ class DelegationReaderTest {
 
     @Test
     void refusesMissingPrincipal() {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
         builder.credentialDisclosures.remove("euid_reference");
 
         ChainException e = assertThrows(ChainException.class, () -> read(builder, defaults()));
@@ -145,7 +145,7 @@ class DelegationReaderTest {
 
     @Test
     void refusesDelegatePayloadWithoutRealmAudience() {
-        ChainBuilder builder = new ChainBuilder().links(2, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(2, "invoice.approve");
         builder.link(2)
                 .delegatePayload
                 .withObjectProperty("mandate")
@@ -162,15 +162,15 @@ class DelegationReaderTest {
 
     @Test
     void skipsAudienceCheckWithoutAudiencePath() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
         builder.link(1).delegatePayload.withObjectProperty("mandate").remove("audiences");
 
-        assertEquals(Set.of("invoice:pay"), read(builder, defaults()).actions());
+        assertEquals(Set.of("invoice.approve"), read(builder, defaults()).actions());
     }
 
     @Test
     void refusesUnacceptedCredentialType() {
-        ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
 
         ChainException e = assertThrows(
                 ChainException.class, () -> read(builder, settings(null, Set.of("urn:eudi-test:business:lpid:1"))));
@@ -180,13 +180,13 @@ class DelegationReaderTest {
 
     @Test
     void claimTakesTheValueOfTheFirstLink() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(2, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(2, "invoice.approve");
         builder.link(2).delegatePayload.withObjectProperty("mandate").remove("limit");
 
         Delegation delegation = read(builder, defaults());
 
         assertEquals(
-                "5000.00",
+                "2500.00",
                 delegation
                         .claim(ClaimPath.parse("mandate.limit.amount"))
                         .orElseThrow()
@@ -196,7 +196,7 @@ class DelegationReaderTest {
 
     @Test
     void claimRefusesALaterLinkWithAnotherValue() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(2, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(2, "invoice.approve");
         ((ObjectNode) builder.link(2)
                         .delegatePayload
                         .withObjectProperty("mandate")
@@ -214,7 +214,7 @@ class DelegationReaderTest {
 
     @Test
     void claimRefusesALaterLinkThatAddsTheClaim() throws Exception {
-        ChainBuilder builder = new ChainBuilder().links(2, "invoice:pay");
+        ChainBuilder builder = new ChainBuilder().links(2, "invoice.approve");
         builder.link(1).delegatePayload.withObjectProperty("mandate").remove("limit");
 
         Delegation delegation = read(builder, defaults());

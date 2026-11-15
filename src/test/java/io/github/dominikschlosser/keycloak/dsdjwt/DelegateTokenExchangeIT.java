@@ -122,7 +122,7 @@ class DelegateTokenExchangeIT {
     @Test
     void exchangesChainForTokenWithRolesClaimsAndActor() throws Exception {
         for (int links : new int[] {1, 2, 4}) {
-            ChainBuilder chain = chain(AGENT).links(links, "invoice:pay", "order:create");
+            ChainBuilder chain = chain(AGENT).links(links, "invoice.approve", "order.create");
 
             JsonNode response = exchange(AGENT, chain.build(), Map.of());
 
@@ -145,9 +145,10 @@ class DelegateTokenExchangeIT {
                 assertFalse(token.has(absent), token.toString());
             }
             assertEquals(
-                    List.of("invoice-payer", "order-creator"), sorted(token.at("/resource_access/" + API + "/roles")));
-            assertEquals("EUR", token.at("/mandate_limit/currency").asText());
-            assertEquals("5000.00", token.at("/mandate_limit/amount").asText());
+                    List.of("invoice-approver", "order-creator"),
+                    sorted(token.at("/resource_access/" + API + "/roles")));
+            assertEquals("EUR", token.at("/approval_limit/currency").asText());
+            assertEquals("2500.00", token.at("/approval_limit/amount").asText());
             assertEquals(JsonSerialization.mapper.valueToTree(actor(links)), token.get("act"));
             assertTrue(token.get("exp").asLong() <= chain.now + 3600);
         }
@@ -156,12 +157,12 @@ class DelegateTokenExchangeIT {
     @Test
     void grantsOnlyRolesOfDelegatedActions() throws Exception {
         JsonNode response = exchange(
-                AGENT, chain(AGENT).links(1, "invoice:pay", "fleet:sell").build(), Map.of());
+                AGENT, chain(AGENT).links(1, "invoice.approve", "fleet.sell").build(), Map.of());
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         JsonNode token = claims(response.get("access_token").asText());
         assertEquals(List.of(API), fieldNames(token.get("resource_access")));
-        assertEquals(List.of("invoice-payer"), sorted(token.at("/resource_access/" + API + "/roles")));
+        assertEquals(List.of("invoice-approver"), sorted(token.at("/resource_access/" + API + "/roles")));
         assertFalse(token.has("realm_access"), token.toString());
     }
 
@@ -169,19 +170,19 @@ class DelegateTokenExchangeIT {
     void ignoresProtocolMappersOfTheClient() throws Exception {
         JsonNode response = exchange(
                 FIXED_ROLE_AGENT,
-                chain(FIXED_ROLE_AGENT).links(1, "invoice:pay").build(),
+                chain(FIXED_ROLE_AGENT).links(1, "invoice.approve").build(),
                 Map.of());
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         JsonNode token = claims(response.get("access_token").asText());
-        assertEquals(List.of("invoice-payer"), sorted(token.at("/resource_access/" + API + "/roles")));
+        assertEquals(List.of("invoice-approver"), sorted(token.at("/resource_access/" + API + "/roles")));
         assertFalse(token.has("tenant"), token.toString());
     }
 
     @Test
     void grantsOnlyActionsTheCredentialAllows() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice:pay", "order:create");
-        chain.credentialActions.removeAll().add("order:create");
+        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve", "order.create");
+        chain.credentialActions.removeAll().add("order.create");
 
         JsonNode response = exchange(AGENT, chain.build(), Map.of());
 
@@ -192,7 +193,8 @@ class DelegateTokenExchangeIT {
 
     @Test
     void issuesTokenForRequestedAudience() throws Exception {
-        JsonNode response = exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of("audience", API));
+        JsonNode response =
+                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of("audience", API));
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         JsonNode audience = claims(response.get("access_token").asText()).get("aud");
@@ -202,7 +204,7 @@ class DelegateTokenExchangeIT {
     @Test
     void refusesAudienceTheDelegationGrantsNoRoleOf() throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of("audience", LEDGER_AGENT)),
+                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of("audience", LEDGER_AGENT)),
                 400,
                 "invalid_request",
                 "the delegation grants no role of the audience " + LEDGER_AGENT);
@@ -213,7 +215,7 @@ class DelegateTokenExchangeIT {
         assertRefused(
                 exchange(
                         FOREIGN_AGENT,
-                        chain(FOREIGN_AGENT).links(1, "invoice:pay").build(),
+                        chain(FOREIGN_AGENT).links(1, "invoice.approve").build(),
                         Map.of()),
                 500,
                 "server_error",
@@ -223,7 +225,8 @@ class DelegateTokenExchangeIT {
 
     @Test
     void introspectionReportsTheTokenInactive() throws Exception {
-        JsonNode response = exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of());
+        JsonNode response =
+                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of());
         assertEquals(200, response.get("status").asInt(), response.toString());
 
         JsonNode introspection = post(
@@ -243,7 +246,7 @@ class DelegateTokenExchangeIT {
     @Test
     void userinfoRefusesExchangedToken() throws Exception {
         JsonNode exchanged =
-                exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of());
+                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of());
         assertEquals(200, exchanged.get("status").asInt(), exchanged.toString());
         HttpRequest request = HttpRequest.newBuilder(URI.create(realmIssuer + "/protocol/openid-connect/userinfo"))
                 .header(
@@ -255,12 +258,12 @@ class DelegateTokenExchangeIT {
         HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertTrue(response.statusCode() == 401 || response.statusCode() == 403, response.toString());
-        assertFalse(response.body().contains("invoice-payer"), response.body());
+        assertFalse(response.body().contains("invoice-approver"), response.body());
     }
 
     @Test
     void refusesPrincipalWhoseSubjectIsAStoredUserId() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
         chain.credentialDisclosures.put("euid_reference", ChainBuilder.text(COLLIDING_PRINCIPAL));
 
         JsonNode response = exchange(AGENT, chain.build(), Map.of());
@@ -271,7 +274,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void capsTokenLifetimeAtChainExpiry() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
         chain.link(1).delegatePayload.put("exp", chain.now + 60);
 
         JsonNode response = exchange(AGENT, chain.build(), Map.of());
@@ -283,7 +286,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesMalformedSubjectTokens() throws Exception {
-        String chain = chain(AGENT).links(1, "invoice:pay").build();
+        String chain = chain(AGENT).links(1, "invoice.approve").build();
         String[] parts = chain.split("~", -1);
         parts[1] = "!!not-base64!!";
 
@@ -294,7 +297,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesCredentialWithUnreachableStatusList() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
         statusListEntry(chain, UNREACHABLE_STATUS_LIST, 7);
 
         assertRefused(
@@ -306,7 +309,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesInvalidCredential() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
         statusListEntry(chain, statusList.uri(), StatusListServer.INVALID_INDEX);
 
         assertRefused(
@@ -318,7 +321,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void acceptsCredentialWithValidStatus() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
         statusListEntry(chain, statusList.uri(), StatusListServer.VALID_INDEX);
 
         JsonNode response = exchange(AGENT, chain.build(), Map.of());
@@ -328,7 +331,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesReplayedNonce() throws Exception {
-        String chain = chain(AGENT).links(1, "invoice:pay").build();
+        String chain = chain(AGENT).links(1, "invoice.approve").build();
 
         assertEquals(200, exchange(AGENT, chain, Map.of()).get("status").asInt());
         assertRefused(
@@ -340,7 +343,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesExpiredNonce() throws Exception {
-        String chain = chain(AGENT).links(1, "invoice:pay").build();
+        String chain = chain(AGENT).links(1, "invoice.approve").build();
 
         Thread.sleep(Duration.ofSeconds(NONCE_LIFESPAN + 2));
 
@@ -354,7 +357,7 @@ class DelegateTokenExchangeIT {
     @Test
     void refusesNonceOfAnotherClientAndKeepsItForItsOwner() throws Exception {
         String nonce = nonce(LEDGER_AGENT);
-        ChainBuilder chain = chain(AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
         chain.keyBindingClaims.put("nonce", nonce);
 
         assertRefused(
@@ -362,7 +365,7 @@ class DelegateTokenExchangeIT {
                 400,
                 "invalid_request",
                 "the nonce of the Key Binding JWT is unknown, expired, already used or issued to another client");
-        ChainBuilder own = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice:pay");
+        ChainBuilder own = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice.approve");
         assertEquals(
                 200, exchange(LEDGER_AGENT, own.build(), Map.of()).get("status").asInt());
     }
@@ -370,7 +373,7 @@ class DelegateTokenExchangeIT {
     @Test
     void keepsTheNonceWhenTheChainHidesThePrincipal() throws Exception {
         String nonce = nonce(AGENT);
-        ChainBuilder hidden = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice:pay");
+        ChainBuilder hidden = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice.approve");
         hidden.credentialDisclosures.remove("euid_reference");
 
         assertRefused(
@@ -378,13 +381,13 @@ class DelegateTokenExchangeIT {
                 400,
                 "invalid_request",
                 "the credential has no text claim euid_reference for the principal");
-        ChainBuilder shown = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice:pay");
+        ChainBuilder shown = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice.approve");
         assertEquals(200, exchange(AGENT, shown.build(), Map.of()).get("status").asInt());
     }
 
     @Test
     void refusesADelegationWithoutTheValueOfARequiredClaimMapper() throws Exception {
-        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice.approve");
         chain.link(1).delegatePayload.withObjectProperty("mandate").remove("limit");
 
         assertRefused(
@@ -396,7 +399,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesARequiredValueWhoseNestedDisclosureTheAgentLeavesOut() throws Exception {
-        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice.approve");
         ChainBuilder.discloseSeparately(
                 chain.link(1).delegatePayload.withObjectProperty("mandate").withObjectProperty("limit"), "amount");
 
@@ -409,7 +412,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void mapsARequiredValueWithItsNestedDisclosure() throws Exception {
-        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice:pay");
+        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice.approve");
         chain.link(1)
                 .extraDisclosures
                 .add(ChainBuilder.discloseSeparately(
@@ -423,16 +426,16 @@ class DelegateTokenExchangeIT {
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         assertEquals(
-                "5000.00",
+                "2500.00",
                 claims(response.get("access_token").asText())
-                        .at("/mandate_limit/amount")
+                        .at("/approval_limit/amount")
                         .asText());
     }
 
     @Test
     void acceptsAnIssuerCertificateThatNamesTheIssuer() throws Exception {
         KeyWrapper key = ChainBuilder.ecKey();
-        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, nonce(X509_AGENT), key).links(1, "invoice:pay");
+        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, nonce(X509_AGENT), key).links(1, "invoice.approve");
         chain.credentialX5c =
                 List.of(ISSUER_CA.issue("Acme Logistics GmbH", key, TestCertificates.uri("https://register.example")));
 
@@ -446,7 +449,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesUntrustedIssuer() throws Exception {
-        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, nonce(AGENT)).links(1, "invoice:pay");
+        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, nonce(AGENT)).links(1, "invoice.approve");
 
         assertRefused(
                 exchange(AGENT, chain.build(), Map.of()),
@@ -458,7 +461,7 @@ class DelegateTokenExchangeIT {
     @Test
     void refusesDelegationWithoutMappedAction() throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "fleet:sell").build(), Map.of()),
+                exchange(AGENT, chain(AGENT).links(1, "fleet.sell").build(), Map.of()),
                 400,
                 "invalid_request",
                 "the delegation allows no action that a mapper grants a role for");
@@ -468,7 +471,7 @@ class DelegateTokenExchangeIT {
     @ValueSource(strings = {"openid", "profile"})
     void refusesScope(String scope) throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of("scope", scope)),
+                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of("scope", scope)),
                 400,
                 "invalid_scope",
                 "the parameter scope is not supported with a Delegate SD-JWT");
@@ -479,7 +482,7 @@ class DelegateTokenExchangeIT {
             strings = {"urn:ietf:params:oauth:token-type:refresh_token", "urn:ietf:params:oauth:token-type:id_token"})
     void refusesOtherTokenTypesThanAccessToken(String type) throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of("requested_token_type", type)),
+                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of("requested_token_type", type)),
                 400,
                 "invalid_request",
                 "the requested_token_type " + type + " is not supported with a Delegate SD-JWT");
@@ -489,7 +492,7 @@ class DelegateTokenExchangeIT {
     @ValueSource(strings = {"actor_token", "requested_subject", "requested_issuer", "subject_issuer"})
     void refusesParametersTheChainReplaces(String parameter) throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of(parameter, "x")),
+                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of(parameter, "x")),
                 400,
                 "invalid_request",
                 "the parameter " + parameter + " is not supported with a Delegate SD-JWT");
@@ -528,7 +531,7 @@ class DelegateTokenExchangeIT {
         JsonNode nonce = post("/realms/" + REALM + "/delegate-sd-jwt/nonce", Map.of("client_id", PUBLIC_AGENT));
         assertRefused(nonce, 400, "invalid_client", "a public client cannot exchange a Delegate SD-JWT");
 
-        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, "unused", ISSUER).links(1, "invoice:pay");
+        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, "unused", ISSUER).links(1, "invoice.approve");
         assertRefused(
                 exchange(PUBLIC_AGENT, chain.build(), Map.of()),
                 400,
@@ -547,7 +550,7 @@ class DelegateTokenExchangeIT {
     @Test
     void reportsAdminRoleMapperAsServerError() throws Exception {
         JsonNode response = exchange(
-                ADMIN_AGENT, chain(ADMIN_AGENT).links(1, "realm:manage").build(), Map.of());
+                ADMIN_AGENT, chain(ADMIN_AGENT).links(1, "realm.manage").build(), Map.of());
 
         assertRefused(response, 500, "server_error", null);
         assertTrue(response.get("error_description").asText().contains("admin role"), response.toString());
@@ -703,12 +706,12 @@ class DelegateTokenExchangeIT {
 
         ObjectNode roles = realm.putObject("roles");
         ArrayNode apiRoles = roles.putObject("client").putArray(API);
-        apiRoles.addObject().put("name", "invoice-payer");
+        apiRoles.addObject().put("name", "invoice-approver");
         apiRoles.addObject().put("name", "order-creator");
 
         ObjectNode colliding = realm.putArray("users").addObject();
         colliding.put("id", principalSubject(COLLIDING_PRINCIPAL));
-        colliding.put("username", "bob");
+        colliding.put("username", "carol");
         colliding.put("enabled", true);
 
         String jwks = JsonSerialization.writeValueAsString(
@@ -737,28 +740,28 @@ class DelegateTokenExchangeIT {
             mapper(
                     mappers,
                     alias,
-                    "pay",
+                    "approve",
                     "delegate-sd-jwt-action-role-mapper",
-                    Map.of("action", "invoice:pay", "role", API + ".invoice-payer"));
+                    Map.of("action", "invoice.approve", "role", API + ".invoice-approver"));
         }
         mapper(
                 mappers,
                 "delegation",
                 "order",
                 "delegate-sd-jwt-action-role-mapper",
-                Map.of("action", "order:create", "role", API + ".order-creator"));
+                Map.of("action", "order.create", "role", API + ".order-creator"));
         mapper(
                 mappers,
                 "delegation",
                 "limit",
                 "delegate-sd-jwt-claim-mapper",
-                Map.of("source", "mandate.limit", "claim.name", "mandate_limit"));
+                Map.of("source", "mandate.limit", "claim.name", "approval_limit"));
         mapper(
                 mappers,
                 "delegation-ledger",
                 "limit",
                 "delegate-sd-jwt-claim-mapper",
-                Map.of("source", "mandate.limit", "claim.name", "mandate_limit", "required", "true"));
+                Map.of("source", "mandate.limit", "claim.name", "approval_limit", "required", "true"));
         mapper(
                 mappers,
                 "delegation-foreign",
@@ -770,7 +773,7 @@ class DelegateTokenExchangeIT {
                 "delegation-admin",
                 "manage",
                 "delegate-sd-jwt-action-role-mapper",
-                Map.of("action", "realm:manage", "role", "realm-management.realm-admin"));
+                Map.of("action", "realm.manage", "role", "realm-management.realm-admin"));
 
         return realm;
     }

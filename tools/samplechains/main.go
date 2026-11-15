@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command vectorgen writes the Delegate SD-JWT test vectors of the Java tests.
+// Command samplechains writes the Delegate SD-JWT sample chains of the Java tests.
 // The eudi-dev Go library builds and checks each chain, so both
 // implementations read the same bytes.
 package main
@@ -42,7 +42,7 @@ const (
 	now       = 1794571300
 )
 
-type vector struct {
+type sampleChain struct {
 	Description string         `json:"description"`
 	IssuerJWK   map[string]any `json:"issuer_jwk"`
 	Audience    string         `json:"audience"`
@@ -56,7 +56,7 @@ type vector struct {
 }
 
 func main() {
-	out := flag.String("out", "src/test/resources/vectors", "output directory")
+	out := flag.String("out", "src/test/resources/sample-chains", "output directory")
 	flag.Parse()
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		log.Fatal(err)
@@ -86,7 +86,7 @@ var linkActions = [][]string{
 	{"invoice.approve"},
 }
 
-func build(links int) (*vector, error) {
+func build(links int) (*sampleChain, error) {
 	issuer := newKey()
 	holder := newKey()
 	credential, err := issueCredential(issuer, holder)
@@ -101,7 +101,7 @@ func build(links int) (*vector, error) {
 		agent := newKey()
 		id := fmt.Sprintf("urn:eudi-test:agent:procurement-%d", i+1)
 		agents = append(agents, id)
-		purpose := disclosure("purpose", "Pay supplier invoices of Bolt Supplies B.V.")
+		purpose := disclosure("purpose", "Approve supplier invoices of Bolt Supplies B.V.")
 		payload := map[string]any{
 			"vct": "urn:eudi-test:business:agent-mandate:1",
 			"iat": now - 100,
@@ -113,14 +113,14 @@ func build(links int) (*vector, error) {
 			},
 			"mandate": map[string]any{
 				"actions": linkActions[i],
-				"limit":   map[string]any{"amount": "5000.00", "currency": "EUR"},
+				"limit":   map[string]any{"amount": "2500.00", "currency": "EUR"},
 				"_sd":     []any{digest(purpose)},
 			},
 		}
 		chain, err = delegate.Append(chain, delegate.KBSDJWT{
 			Type: delegate.TypeKBSDJWTKB,
 			// The second link binds with issuer_jwt_hash so both hash claims
-			// appear in the vectors.
+			// appear in the sample chains.
 			IssuerJWTHash: i == 1,
 			Payloads: []delegate.PayloadDisclosure{{
 				Disclosure:  disclosure(payload),
@@ -165,7 +165,7 @@ func build(links int) (*vector, error) {
 	if valid != (verifyErr == nil) {
 		return nil, fmt.Errorf("expected valid=%t, the Go verifier says %v", valid, verifyErr)
 	}
-	return &vector{
+	return &sampleChain{
 		Description: fmt.Sprintf("dSD-JWT+KB with %d KB-SD-JWTs", links),
 		IssuerJWK:   publicJWK(issuer),
 		Audience:    audience,
