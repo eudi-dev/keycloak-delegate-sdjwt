@@ -6,11 +6,11 @@ The token type is `urn:eudi-dev:params:oauth:token-type:dsd-jwt-kb`. The draft d
 
 The extension plugs into the token exchange provider SPI with order 20. Keycloak asks the provider with the highest order first, and standard token exchange has order 10. The provider claims every request with the Delegate SD-JWT token type, so no other provider reads the dSD-JWT+KB as a token of its own. It refuses the requests it cannot serve with a precise error.
 
-The provider reuses the standard token exchange of Keycloak 26.8.2 for everything after the chain check. Client authentication, audience checks, consent, client policies and token building stay the same as for any other exchange.
+Keycloak authenticates the client and runs the client policies for the request. After the chain check the provider builds the access token itself (ADR 0008).
 
 ## Consequences
 
-The exchange issues access tokens only. A request for a refresh token or an ID token is refused, and so is the scope `openid`. The agent asks for a new token with a fresh Key Binding JWT when the old one expires.
+The exchange issues access tokens only. A request for a refresh token or an ID token is refused, and so is the `scope` parameter. The agent asks for a new token with a fresh Key Binding JWT when the old one expires.
 
 `actor_token`, `requested_subject`, `requested_issuer` and `subject_issuer` are refused. The chain itself says who acts for whom.
 

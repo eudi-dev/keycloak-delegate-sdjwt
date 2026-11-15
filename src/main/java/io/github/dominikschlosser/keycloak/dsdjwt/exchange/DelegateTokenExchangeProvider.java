@@ -31,54 +31,60 @@ import io.github.dominikschlosser.keycloak.dsdjwt.mapper.DelegationMapper;
 import io.github.dominikschlosser.keycloak.dsdjwt.nonce.NonceStore;
 import io.github.dominikschlosser.keycloak.dsdjwt.status.HttpStatusListFetcher;
 import io.github.dominikschlosser.keycloak.dsdjwt.status.StatusListChecker;
+import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.OAuthErrorException;
 import org.keycloak.broker.provider.IdentityProviderMapper;
+import org.keycloak.common.util.Time;
 import org.keycloak.connections.httpclient.HttpClientProvider;
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
+import org.keycloak.events.EventBuilder;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.IdentityProviderMapperModel;
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.RealmModel;
 import org.keycloak.models.RoleModel;
-import org.keycloak.models.UserModel;
-import org.keycloak.models.UserSessionModel;
-import org.keycloak.models.light.LightweightUserAdapter;
 import org.keycloak.models.utils.RoleUtils;
 import org.keycloak.protocol.oidc.OIDCAdvancedConfigWrapper;
+import org.keycloak.protocol.oidc.OIDCConfigAttributes;
 import org.keycloak.protocol.oidc.TokenExchangeContext;
-import org.keycloak.protocol.oidc.TokenManager;
-import org.keycloak.protocol.oidc.tokenexchange.StandardTokenExchangeProvider;
+import org.keycloak.protocol.oidc.TokenExchangeProvider;
 import org.keycloak.representations.AccessToken;
+import org.keycloak.representations.AccessTokenResponse;
 import org.keycloak.representations.IDToken;
 import org.keycloak.services.CorsErrorResponseException;
 import org.keycloak.services.Urls;
-import org.keycloak.services.managers.UserSessionManager;
+import org.keycloak.services.cors.Cors;
 import org.keycloak.util.TokenUtil;
 
 /**
  * Exchanges a dSD-JWT+KB (draft-ietf-oauth-delegate-sd-jwt-00 §5.1.1) for an access token of the
  * realm, as RFC 8693 describes. The principal of the credential becomes the subject and the agents
- * become the act claim (RFC 8693 §4.1).
+ * become the act claim (RFC 8693 §4.1). The provider builds the token itself, so only the mappers of
+ * the identity provider shape it.
  */
-public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider {
+public class DelegateTokenExchangeProvider implements TokenExchangeProvider {
 
     public static final String TOKEN_TYPE = "urn:eudi-dev:params:oauth:token-type:dsd-jwt-kb";
 
-    private static final String AUTH_METHOD = "delegate-sd-jwt";
-
-    private Delegation delegation;
-    private DelegationGrant grant;
-    private String subjectId;
+    private KeycloakSession session;
+    private RealmModel realm;
+    private ClientModel client;
+    private EventBuilder event;
+    private Cors cors;
+    private TokenExchangeContext.Params params;
 
     /**
      * Claims every request with our token type, also the ones it cannot serve, so no other provider
-     * treats a dSD-JWT+KB as a token of its own. tokenExchange refuses those requests.
+     * treats a dSD-JWT+KB as a token of its own. exchange refuses those requests.
      */
     @Override
     public boolean supports(TokenExchangeContext context) {
@@ -86,8 +92,14 @@ public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider
     }
 
     @Override
-    protected Response tokenExchange() {
-        checkRequest();
+    public Response exchange(TokenExchangeContext context) {
+        session = context.getSession();
+        realm = context.getRealm();
+        client = context.getClient();
+        event = context.getEvent();
+        cors = context.getCors();
+        params = context.getParams();
+        checkRequest(context);
         DelegateSdJwtIdentityProviderConfig config = identityProvider();
         // The chain parser also throws IllegalArgumentException on bad input, so a config error caught
         // later would hide a malformed request.
@@ -96,32 +108,36 @@ public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider
         } catch (IllegalArgumentException e) {
             throw misconfigured(e);
         }
-        UserModel user;
+        String realmIssuer = Urls.realmIssuer(session.getContext().getUri().getBaseUri(), realm.getName());
+        Delegation delegation;
+        DelegationGrant grant;
+        String subject;
         try {
-            verify(config);
-            user = user();
+            delegation = verify(config, realmIssuer);
+            grant = grant(config, delegation);
+            subject = subject(delegation);
         } catch (ChainException e) {
             throw refuse(OAuthErrorException.INVALID_REQUEST, Errors.INVALID_TOKEN, e.getMessage());
         } catch (ConfigurationException e) {
             throw misconfigured(e);
         }
-        event.user(subjectId).detail(Details.USERNAME, delegation.principal());
-        UserSessionModel userSession = new UserSessionManager(session)
-                .createUserSession(
-                        null,
-                        realm,
-                        user,
-                        delegation.principal(),
-                        clientConnection.getRemoteHost(),
-                        AUTH_METHOD,
-                        false,
-                        null,
-                        null,
-                        UserSessionModel.SessionPersistenceState.TRANSIENT);
-        return exchangeClientToClient(user, userSession, null, true);
+        event.user(subject).detail(Details.USERNAME, delegation.principal());
+        AccessToken token = token(realmIssuer, subject, delegation, grant);
+        // The signature algorithm and the header type come from the client in the context.
+        session.getContext().setClient(client);
+        AccessTokenResponse response = new AccessTokenResponse();
+        response.setToken(session.tokens().encode(token));
+        response.setTokenType(TokenUtil.TOKEN_TYPE_BEARER);
+        response.setExpiresIn(token.getExp() - Time.currentTime());
+        response.setOtherClaims(OAuth2Constants.ISSUED_TOKEN_TYPE, OAuth2Constants.ACCESS_TOKEN_TYPE);
+        if (token.getAudience() != null) {
+            event.detail(Details.AUDIENCE, String.join(" ", token.getAudience()));
+        }
+        event.success();
+        return cors.add(Response.ok(response, MediaType.APPLICATION_JSON_TYPE));
     }
 
-    private void checkRequest() {
+    private void checkRequest(TokenExchangeContext context) {
         if (client.isPublicClient()) {
             throw refuse(
                     OAuthErrorException.INVALID_CLIENT,
@@ -142,7 +158,7 @@ public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider
                 OAuth2Constants.REQUESTED_SUBJECT,
                 OAuth2Constants.REQUESTED_ISSUER,
                 OAuth2Constants.SUBJECT_ISSUER)) {
-            if (formParams.getFirst(parameter) != null) {
+            if (context.getFormParams().getFirst(parameter) != null) {
                 throw refuse(
                         OAuthErrorException.INVALID_REQUEST,
                         Errors.INVALID_REQUEST,
@@ -155,12 +171,19 @@ public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider
                     Errors.INVALID_REQUEST,
                     "the parameter subject_token is required");
         }
-        // The principal has no login at this realm, so the exchange issues no ID token.
-        if (TokenUtil.isOIDCRequest(formParams.getFirst(OAuth2Constants.SCOPE))) {
+        // The mappers alone decide what the token holds, so a scope could not narrow it.
+        if (context.getFormParams().getFirst(OAuth2Constants.SCOPE) != null) {
             throw refuse(
                     OAuthErrorException.INVALID_SCOPE,
                     Errors.INVALID_SCOPE,
-                    "the scope openid is not supported with a Delegate SD-JWT");
+                    "the parameter scope is not supported with a Delegate SD-JWT");
+        }
+        String requested = params.getRequestedTokenType();
+        if (requested != null && !OAuth2Constants.ACCESS_TOKEN_TYPE.equals(requested)) {
+            throw refuse(
+                    OAuthErrorException.INVALID_REQUEST,
+                    Errors.INVALID_REQUEST,
+                    "the requested_token_type " + requested + " is not supported with a Delegate SD-JWT");
         }
     }
 
@@ -189,12 +212,11 @@ public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider
                 Response.Status.INTERNAL_SERVER_ERROR);
     }
 
-    private void verify(DelegateSdJwtIdentityProviderConfig config) throws ChainException {
-        String realmIssuer = Urls.realmIssuer(session.getContext().getUri().getBaseUri(), realm.getName());
+    private Delegation verify(DelegateSdJwtIdentityProviderConfig config, String realmIssuer) throws ChainException {
         TrustedIssuerKeys trust = new TrustedIssuerKeys(new DelegateSdJwtIdentityProvider(session, config));
         VerifiedChain chain =
                 new ChainVerifier(trust, KeycloakClock.INSTANCE).verify(params.getSubjectToken(), realmIssuer);
-        delegation = new DelegationReader(new DelegationReader.Settings(
+        Delegation delegation = new DelegationReader(new DelegationReader.Settings(
                         config.getPrincipalClaim(),
                         config.getCredentialActionsPath(),
                         config.getActionsPath(),
@@ -214,7 +236,12 @@ public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider
                         KeycloakClock.INSTANCE,
                         ChainVerifier.CLOCK_SKEW)
                 .check(chain.credential());
-        grant = new DelegationGrant();
+        return delegation;
+    }
+
+    private DelegationGrant grant(DelegateSdJwtIdentityProviderConfig config, Delegation delegation)
+            throws ChainException {
+        DelegationGrant grant = new DelegationGrant();
         List<IdentityProviderMapperModel> mappers = session.identityProviders()
                 .getMappersByAliasStream(config.getAlias())
                 .sorted(Comparator.comparing(IdentityProviderMapperModel::getName))
@@ -231,97 +258,87 @@ public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider
         if (grant.roles().isEmpty()) {
             throw new ChainException("the delegation allows no action that a mapper grants a role for");
         }
+        return grant;
     }
 
-    /** Builds a lightweight user with only the mapped roles. */
-    private UserModel user() {
+    private String subject(Delegation delegation) {
         String principal = delegation.principal();
         // The same issuer and principal always give the same subject. It is never the id of a stored
-        // user: introspection of a token without sid builds a session for the stored user with the
-        // subject id, and that session carries the user's own roles instead of the delegated ones.
-        subjectId = UUID.nameUUIDFromBytes((delegation.issuer() + "|" + principal).getBytes(StandardCharsets.UTF_8))
+        // user: introspection and userinfo look up a token without sid as the user with the subject id,
+        // and they would then report that user's own roles.
+        String subject = UUID.nameUUIDFromBytes(
+                        (delegation.issuer() + "|" + principal).getBytes(StandardCharsets.UTF_8))
                 .toString();
-        if (session.users().getUserById(realm, subjectId) != null) {
-            throw new ConfigurationException("the stored user " + subjectId + " has the subject id of the principal "
+        if (session.users().getUserById(realm, subject) != null) {
+            throw new ConfigurationException("the stored user " + subject + " has the subject id of the principal "
                     + principal + ", so its own roles would apply to the token");
         }
-        LightweightUserAdapter user = new LightweightUserAdapter(session, realm, subjectId);
-        user.setUsername(principal);
-        user.setEnabled(true);
-        for (RoleModel role : grant.roles()) {
-            user.grantRole(role);
-        }
-        return user;
+        return subject;
     }
 
-    @Override
-    protected String getRequestedTokenType() {
-        String requested = params.getRequestedTokenType();
-        if (requested == null || OAuth2Constants.ACCESS_TOKEN_TYPE.equals(requested)) {
-            return OAuth2Constants.ACCESS_TOKEN_TYPE;
-        }
-        throw refuse(
-                OAuthErrorException.INVALID_REQUEST,
-                Errors.INVALID_REQUEST,
-                "the requested_token_type " + requested + " is not supported with a Delegate SD-JWT");
-    }
-
-    @Override
-    protected void checkRequestedAudiences(TokenManager.AccessTokenResponseBuilder responseBuilder) {
-        super.checkRequestedAudiences(responseBuilder);
-        AccessToken token = responseBuilder.getAccessToken();
-        token.subject(subjectId);
+    private AccessToken token(String realmIssuer, String subject, Delegation delegation, DelegationGrant grant) {
+        AccessToken token = new AccessToken();
+        token.id(UUID.randomUUID().toString());
+        token.issuer(realmIssuer);
+        token.subject(subject);
+        token.issuedFor(client.getClientId());
+        token.type(TokenUtil.TOKEN_TYPE_BEARER);
+        token.issuedNow();
+        token.exp(Math.min(token.getIat() + lifespan(), delegation.expiresAt()));
         token.getOtherClaims().put(IDToken.ACT, delegation.actor());
+        for (RoleModel role : RoleUtils.expandCompositeRoles(grant.roles())) {
+            if (!role.isClientRole()) {
+                if (token.getRealmAccess() == null) {
+                    token.setRealmAccess(new AccessToken.Access());
+                }
+                token.getRealmAccess().addRole(role.getName());
+            } else if (role.getContainer() instanceof ClientModel owner) {
+                token.addAccess(owner.getClientId()).addRole(role.getName());
+            }
+        }
+        audience(token);
         try {
             grant.applyClaims(token);
         } catch (ConfigurationException e) {
             throw misconfigured(e);
         }
-        if (token.getExp() == null || token.getExp() > delegation.expiresAt()) {
-            token.exp(delegation.expiresAt());
-        }
-        checkGrantedRoles(token);
+        return token;
     }
 
-    /**
-     * The protocol mappers of the client run on the token after the user's roles. A hardcoded role
-     * mapper there would give the agents a role the delegation does not allow.
-     */
-    private void checkGrantedRoles(AccessToken token) {
-        Set<RoleModel> granted = RoleUtils.expandCompositeRoles(grant.roles());
-        if (token.getRealmAccess() != null && token.getRealmAccess().getRoles() != null) {
-            for (String name : token.getRealmAccess().getRoles()) {
-                if (granted.stream()
-                        .noneMatch(
-                                role -> !role.isClientRole() && role.getName().equals(name))) {
-                    throw notGranted(name);
+    private long lifespan() {
+        String lifespan = client.getAttribute(OIDCConfigAttributes.ACCESS_TOKEN_LIFESPAN);
+        return lifespan == null || lifespan.isBlank()
+                ? realm.getAccessTokenLifespan()
+                : Long.parseLong(lifespan.trim());
+    }
+
+    /** The audience is each other client the token holds a role of, or the requested ones among them. */
+    private void audience(AccessToken token) {
+        Set<String> available = new LinkedHashSet<>(token.getResourceAccess().keySet());
+        available.remove(client.getClientId());
+        List<String> requested = params.getAudience();
+        if (requested != null && !requested.isEmpty()) {
+            for (String audience : requested) {
+                if (realm.getClientByClientId(audience) == null) {
+                    event.detail(Details.AUDIENCE, audience);
+                    throw refuse(
+                            OAuthErrorException.INVALID_CLIENT,
+                            Errors.CLIENT_NOT_FOUND,
+                            "the audience " + audience + " is not a client of the realm");
+                }
+                if (!available.contains(audience)) {
+                    throw refuse(
+                            OAuthErrorException.INVALID_REQUEST,
+                            Errors.INVALID_REQUEST,
+                            "the delegation grants no role of the audience " + audience);
                 }
             }
+            available.retainAll(requested);
+            token.getResourceAccess().keySet().retainAll(requested);
         }
-        if (token.getResourceAccess() != null) {
-            token.getResourceAccess().forEach((clientId, access) -> {
-                if (access.getRoles() == null) {
-                    return;
-                }
-                for (String name : access.getRoles()) {
-                    if (granted.stream()
-                            .noneMatch(role -> role.isClientRole()
-                                    && role.getName().equals(name)
-                                    && role.getContainer() instanceof ClientModel owner
-                                    && owner.getClientId().equals(clientId))) {
-                        throw notGranted(clientId + "." + name);
-                    }
-                }
-            });
+        if (!available.isEmpty()) {
+            token.audience(available.toArray(String[]::new));
         }
-    }
-
-    private CorsErrorResponseException notGranted(String role) {
-        String description = "the token holds the role " + role + ", which the delegation does not grant";
-        event.detail(Details.REASON, description);
-        event.error(Errors.INVALID_CONFIG);
-        return new CorsErrorResponseException(
-                cors, OAuthErrorException.SERVER_ERROR, description, Response.Status.INTERNAL_SERVER_ERROR);
     }
 
     /** RFC 8693 §2.2.2: a subject_token that fails validation is an invalid_request. */
@@ -330,4 +347,7 @@ public class DelegateTokenExchangeProvider extends StandardTokenExchangeProvider
         event.error(eventError);
         return new CorsErrorResponseException(cors, error, description, Response.Status.BAD_REQUEST);
     }
+
+    @Override
+    public void close() {}
 }

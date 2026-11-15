@@ -100,7 +100,7 @@ class DelegateTokenExchangeIT {
                 .withCommand(
                         "start-dev",
                         "--import-realm",
-                        "--features=transient-users,oid4vc-vci",
+                        "--features=oid4vc-vci",
                         "--truststore-paths=/opt/keycloak/conf/status-list.pem",
                         "--spi-realm-restapi-extension--delegate-sd-jwt--nonce-lifespan=" + NONCE_LIFESPAN)
                 .withExposedPorts(8080)
@@ -138,6 +138,13 @@ class DelegateTokenExchangeIT {
             assertEquals(realmIssuer, token.get("iss").asText());
             assertEquals(principalSubject(), token.get("sub").asText());
             assertEquals(AGENT, token.get("azp").asText());
+            assertEquals(API, token.get("aud").asText());
+            assertEquals("Bearer", token.get("typ").asText());
+            assertFalse(token.get("jti").asText().isEmpty(), token.toString());
+            assertEquals(300, token.get("exp").asLong() - token.get("iat").asLong());
+            for (String absent : List.of("sid", "scope", "preferred_username", "acr", "allowed-origins")) {
+                assertFalse(token.has(absent), token.toString());
+            }
             assertEquals(
                     List.of("invoice-payer", "order-creator"), sorted(token.at("/resource_access/" + API + "/roles")));
             assertEquals("EUR", token.at("/mandate_limit/currency").asText());
@@ -160,17 +167,16 @@ class DelegateTokenExchangeIT {
     }
 
     @Test
-    void refusesRoleThatAProtocolMapperOfTheClientAdds() throws Exception {
+    void ignoresProtocolMappersOfTheClient() throws Exception {
         JsonNode response = exchange(
                 FIXED_ROLE_AGENT,
                 chain(FIXED_ROLE_AGENT).links(1, "invoice:pay").build(),
                 Map.of());
 
-        assertRefused(
-                response,
-                500,
-                "server_error",
-                "the token holds the role " + API + ".order-creator, which the delegation does not grant");
+        assertEquals(200, response.get("status").asInt(), response.toString());
+        JsonNode token = claims(response.get("access_token").asText());
+        assertEquals(List.of("invoice-payer"), sorted(token.at("/resource_access/" + API + "/roles")));
+        assertFalse(token.has("tenant"), token.toString());
     }
 
     @Test
@@ -192,6 +198,15 @@ class DelegateTokenExchangeIT {
         assertEquals(200, response.get("status").asInt(), response.toString());
         JsonNode audience = claims(response.get("access_token").asText()).get("aud");
         assertEquals(API, audience.isArray() ? audience.get(0).asText() : audience.asText());
+    }
+
+    @Test
+    void refusesAudienceTheDelegationGrantsNoRoleOf() throws Exception {
+        assertRefused(
+                exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of("audience", LEDGER_AGENT)),
+                400,
+                "invalid_request",
+                "the delegation grants no role of the audience " + LEDGER_AGENT);
     }
 
     @Test
@@ -463,13 +478,14 @@ class DelegateTokenExchangeIT {
                 "the delegation allows no action that a mapper grants a role for");
     }
 
-    @Test
-    void refusesOpenidScope() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"openid", "profile"})
+    void refusesScope(String scope) throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of("scope", "openid")),
+                exchange(AGENT, chain(AGENT).links(1, "invoice:pay").build(), Map.of("scope", scope)),
                 400,
                 "invalid_scope",
-                "the scope openid is not supported with a Delegate SD-JWT");
+                "the parameter scope is not supported with a Delegate SD-JWT");
     }
 
     @ParameterizedTest
@@ -682,11 +698,21 @@ class DelegateTokenExchangeIT {
             client.put("directAccessGrantsEnabled", false);
             client.putObject("attributes").put("standard.token.exchange.enabled", "true");
             if (clientId.equals(FIXED_ROLE_AGENT)) {
-                ObjectNode fixedRole = client.putArray("protocolMappers").addObject();
+                ArrayNode protocolMappers = client.putArray("protocolMappers");
+                ObjectNode fixedRole = protocolMappers.addObject();
                 fixedRole.put("name", "fixed role");
                 fixedRole.put("protocol", "openid-connect");
                 fixedRole.put("protocolMapper", "oidc-hardcoded-role-mapper");
                 fixedRole.putObject("config").put("role", API + ".order-creator");
+                ObjectNode fixedClaim = protocolMappers.addObject();
+                fixedClaim.put("name", "fixed claim");
+                fixedClaim.put("protocol", "openid-connect");
+                fixedClaim.put("protocolMapper", "oidc-hardcoded-claim-mapper");
+                fixedClaim
+                        .putObject("config")
+                        .put("claim.name", "tenant")
+                        .put("claim.value", "acme")
+                        .put("access.token.claim", "true");
             }
         }
 

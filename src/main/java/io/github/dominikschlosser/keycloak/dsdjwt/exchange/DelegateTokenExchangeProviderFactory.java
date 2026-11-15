@@ -48,11 +48,9 @@ public class DelegateTokenExchangeProviderFactory
         return PROVIDER_ID;
     }
 
-    /** The principal becomes a lightweight user, which needs the transient users feature. */
     @Override
     public boolean isSupported(Config.Scope config) {
-        return Profile.isFeatureEnabled(Profile.Feature.TOKEN_EXCHANGE_STANDARD_V2)
-                && Profile.isFeatureEnabled(Profile.Feature.TRANSIENT_USERS);
+        return Profile.isFeatureEnabled(Profile.Feature.TOKEN_EXCHANGE_STANDARD_V2);
     }
 
     /**

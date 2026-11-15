@@ -10,7 +10,12 @@ Acme Logistics GmbH holds a power of attorney credential. It delegates invoice p
 {
   "iss": "https://iam.acme.example/realms/acme",
   "sub": "5c0b5f0e-3bd4-3a43-9a5b-4b5fe2f1b0a1",
+  "aud": "invoice-api",
   "azp": "procurement-agent",
+  "typ": "Bearer",
+  "iat": 1795075200,
+  "exp": 1795075500,
+  "jti": "0f8e1c52-2d4b-4a51-9b7e-3c1d2e4f5a6b",
   "act": { "sub": "urn:eudi-test:agent:procurement-1" },
   "resource_access": { "invoice-api": { "roles": ["invoice-payer"] } },
   "mandate_limit": { "amount": "5000.00", "currency": "EUR" }
@@ -30,13 +35,13 @@ If a check fails, the exchange returns `invalid_request` with a description of t
 
 - `invalid_client` for a public client.
 - `unauthorized_client` when no Delegate SD-JWT identity provider lists the client.
-- `invalid_scope` for the scope `openid`.
+- `invalid_scope` for any `scope`.
 - `server_error` when the identity provider or a mapper is misconfigured.
 
 ## Requirements
 
 - Keycloak 26.8.2
-- The features `token-exchange-standard` (on by default) and `transient-users`
+- The feature `token-exchange-standard`, which is on by default
 - For a Default Trust identity provider, one of the features `oid4vc-vci`, `oid4vc-vp` or `client-auth-abca`
 
 ## Install
@@ -49,20 +54,13 @@ mvn -B verify
 
 The integration tests start Keycloak with Testcontainers, so they need Docker. Use `-DskipITs` to skip them.
 
-Copy `target/keycloak-delegate-sdjwt.jar` to `/opt/keycloak/providers/` and start Keycloak with transient users:
-
-```sh
-bin/kc.sh build --features=transient-users
-bin/kc.sh start --optimized
-```
-
-`transient-users` is an experimental Keycloak feature (ADR 0007).
+Copy `target/keycloak-delegate-sdjwt.jar` to `/opt/keycloak/providers/` and run `bin/kc.sh build`.
 
 ## Realm setup
 
 ### Client
 
-The agent uses a confidential client with **Standard Token Exchange** turned on. It needs no other flow. Full scope or scope mappings must allow the roles the mappers grant.
+The agent uses a confidential client with **Standard Token Exchange** turned on. It needs no other flow. The client scopes and protocol mappers of the client don't apply to the token. The extension builds the token from the mappers alone (ADR 0008).
 
 ### Identity provider
 
