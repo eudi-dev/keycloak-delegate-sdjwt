@@ -26,11 +26,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.dominikschlosser.keycloak.dsdjwt.ChainBuilder;
-import io.github.dominikschlosser.keycloak.dsdjwt.SampleChains;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPublicKey;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -60,67 +58,6 @@ class ChainVerifierTest {
 
     @ParameterizedTest
     @ValueSource(ints = {1, 2, 4})
-    void acceptsTheGoSampleChains(int links) throws Exception {
-        JsonNode sample = SampleChains.read("chain-" + links + "-links.json");
-
-        VerifiedChain chain = verifier(
-                        SampleChains.jwk(sample.get("issuer_jwk")),
-                        sample.get("now").asLong())
-                .verify(sample.get("chain").asText(), sample.get("audience").asText());
-
-        assertEquals(links, chain.links().size());
-        assertEquals(sample.get("nonce").asText(), chain.nonce());
-        assertEquals("DEACME.HRB4711", chain.credential().get("euid_reference").asText());
-        List<String> agents = new ArrayList<>();
-        chain.links()
-                .forEach(link ->
-                        agents.add(link.delegatePayload().at("/agent/id").asText()));
-        assertEquals(agentsOf(sample), agents);
-        assertEquals(
-                "Approve supplier invoices",
-                chain.links().get(0).delegatePayload().at("/mandate/purpose").asText());
-    }
-
-    @Test
-    void refusesTheGoSampleChainWith5Links() {
-        JsonNode sample = SampleChains.read("chain-5-links.json");
-
-        ChainException e = assertThrows(ChainException.class, () -> verifier(
-                        SampleChains.jwk(sample.get("issuer_jwk")),
-                        sample.get("now").asLong())
-                .verify(sample.get("chain").asText(), sample.get("audience").asText()));
-
-        assertEquals("the chain has 5 KB-SD-JWTs, but at most 4 are accepted", e.getMessage());
-    }
-
-    @Test
-    void acceptsTheGoldenChainOfEudiBusiness() throws Exception {
-        JsonNode sample = SampleChains.read("golden-chain.json");
-        JsonNode expected = sample.at("/verifier");
-
-        VerifiedChain chain = verifier(
-                        SampleChains.jwk(sample.at("/keys/issuer")),
-                        expected.get("time").asLong())
-                .verify(sample.get("token").asText(), expected.get("audience").asText());
-
-        assertEquals(expected.get("nonce").asText(), chain.nonce());
-        assertEquals(1, chain.links().size());
-        assertEquals(
-                "DETEST.HRB900001", chain.credential().get("euid_reference").asText());
-        assertEquals(
-                "order.create",
-                chain.links().get(0).delegatePayload().at("/mandate/actions/0").asText());
-        assertEquals(
-                expected.get("audience").asText(),
-                chain.links()
-                        .get(0)
-                        .delegatePayload()
-                        .at("/mandate/audiences/0")
-                        .asText());
-    }
-
-    @ParameterizedTest
-    @ValueSource(ints = {1, 2, 4})
     void acceptsChainsOfTheJavaBuilder(int links) throws Exception {
         ChainBuilder builder = new ChainBuilder().links(links, "invoice.approve");
         builder.link(1).issuerJwtHash = links > 1;
@@ -130,6 +67,11 @@ class ChainVerifierTest {
         assertEquals(links, chain.links().size());
         assertEquals(NONCE, chain.nonce());
         assertEquals(NOW + 3600, chain.expiresAt());
+    }
+
+    @Test
+    void refusesAChainWith5Links() {
+        assertRefused(b -> b.links(5, "invoice.approve"), "the chain has 5 KB-SD-JWTs, but at most 4 are accepted");
     }
 
     @Test
@@ -163,7 +105,7 @@ class ChainVerifierTest {
     @Test
     void refusesWhenNoIssuerKeyIsTrusted() {
         ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
-        ChainVerifier verifier = new ChainVerifier((header, iss) -> List.of());
+        ChainVerifier verifier = new ChainVerifier(ChainBuilder.trust(ChainBuilder.ISSUER));
         useTime(NOW);
 
         ChainException e = assertThrows(ChainException.class, () -> verifier.verify(builder.build(), AUDIENCE));
@@ -655,16 +597,10 @@ class ChainVerifierTest {
 
     static ChainVerifier verifier(JWK issuer, long now) {
         useTime(now);
-        return new ChainVerifier((header, iss) -> List.of(JwkVerifiers.forKey(issuer, header.getRawAlgorithm())));
+        return new ChainVerifier(ChainBuilder.trust(ChainBuilder.ISSUER, issuer));
     }
 
     static void useTime(long now) {
         Time.setOffset((int) (now - System.currentTimeMillis() / 1000));
-    }
-
-    private static List<String> agentsOf(JsonNode sample) {
-        List<String> agents = new ArrayList<>();
-        sample.get("agents").forEach(agent -> agents.add(agent.asText()));
-        return agents;
     }
 }

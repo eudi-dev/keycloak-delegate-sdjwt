@@ -74,6 +74,16 @@ class DelegationReaderTest {
     }
 
     @Test
+    void keepsThePathsThatTheFirstDelegatePayloadWithholds() throws Exception {
+        ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
+        ChainBuilder.discloseSeparately(
+                builder.link(1).delegatePayload.withObjectProperty("mandate").withObjectProperty("limit"), "amount");
+
+        assertEquals(
+                Set.of(List.of("mandate", "limit")), read(builder, defaults()).firstWithheld());
+    }
+
+    @Test
     void acceptsSingleTextAction() throws Exception {
         ChainBuilder builder = new ChainBuilder().links(1, "invoice.approve");
         builder.link(1).delegatePayload.withObjectProperty("mandate").put("actions", "invoice.approve");
@@ -243,8 +253,7 @@ class DelegationReaderTest {
 
     private static Delegation read(ChainBuilder builder, DelegationReader.Settings settings) throws ChainException {
         Time.setOffset((int) (builder.now - System.currentTimeMillis() / 1000));
-        ChainVerifier verifier = new ChainVerifier(
-                (header, iss) -> List.of(JwkVerifiers.forKey(builder.issuerJwk(), header.getRawAlgorithm())));
+        ChainVerifier verifier = new ChainVerifier(ChainBuilder.trust(ChainBuilder.ISSUER, builder.issuerJwk()));
         return new DelegationReader(settings).read(verifier.verify(builder.build(), AUDIENCE));
     }
 }

@@ -19,12 +19,17 @@ package io.github.dominikschlosser.keycloak.dsdjwt;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.dominikschlosser.keycloak.dsdjwt.chain.IssuerKeyResolver;
+import io.github.dominikschlosser.keycloak.dsdjwt.idp.DelegateSdJwtIdentityProvider;
+import io.github.dominikschlosser.keycloak.dsdjwt.idp.DelegateSdJwtIdentityProviderConfig;
+import io.github.dominikschlosser.keycloak.dsdjwt.idp.TrustedIssuerKeys;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +50,7 @@ import org.keycloak.util.JsonSerialization;
  */
 public final class ChainBuilder {
 
+    public static final String ISSUER = "https://register.example";
     public static final String AUDIENCE = "https://iam.acme.example/realms/acme";
     public static final String NONCE = "YWNtZS1ub25jZQ";
     public static final String PRINCIPAL = "DEACME.HRB4711";
@@ -52,7 +58,7 @@ public final class ChainBuilder {
 
     public final long now;
     public final String audience;
-    public final KeyWrapper issuer;
+    public final KeyWrapper issuer = ecKey();
     public final KeyWrapper holder = ecKey();
     public String credentialType = "dc+sd-jwt";
     public String credentialSdAlg = "sha-256";
@@ -62,10 +68,14 @@ public final class ChainBuilder {
     public final ArrayNode credentialActions = JsonSerialization.mapper.createArrayNode();
     /** Replaces the Disclosures of the credential after signing when not null. */
     public List<String> credentialDisclosureOverride;
-    /** The x5c header of the credential. Without it the header carries no certificate. */
-    public List<X509Certificate> credentialX5c;
 
     public final List<Link> links = new ArrayList<>();
+
+    /** A chain from a wallet. build() continues it and signs no credential. */
+    private String walletChain;
+
+    private KeyWrapper walletAgent;
+    private int walletLinks;
 
     public String keyBindingType = "kb+jwt";
     public final ObjectNode keyBindingClaims = object();
@@ -108,15 +118,9 @@ public final class ChainBuilder {
 
     /** Builds chains for a verifier at this time, with this realm issuer and nonce. */
     public ChainBuilder(long now, String audience, String nonce) {
-        this(now, audience, nonce, ecKey());
-    }
-
-    /** Builds chains whose credential this issuer key signs. */
-    public ChainBuilder(long now, String audience, String nonce, KeyWrapper issuer) {
-        this.issuer = issuer;
         this.now = now;
         this.audience = audience;
-        credentialClaims.put("iss", "https://register.example");
+        credentialClaims.put("iss", ISSUER);
         credentialClaims.put("vct", "urn:eudi-test:business:poa:1");
         credentialClaims.put("iat", now - 3600);
         credentialClaims.put("exp", now + 86400);
@@ -129,11 +133,26 @@ public final class ChainBuilder {
         keyBindingClaims.put("nonce", nonce);
     }
 
+    /**
+     * Continues a chain from a wallet, which has no Key Binding JWT. The agent key belongs to the
+     * cnf of the last Delegate Payload.
+     */
+    public static ChainBuilder fromWallet(String chain, KeyWrapper agent, long now, String audience, String nonce) {
+        ChainBuilder builder = new ChainBuilder(now, audience, nonce);
+        builder.walletChain = chain;
+        builder.walletAgent = agent;
+        builder.walletLinks = (int) Arrays.stream(chain.split("~"))
+                        .filter(ChainBuilder::isJwt)
+                        .count()
+                - 1;
+        return builder;
+    }
+
     /** Adds n links. Link i delegates to agent i with the given actions. */
     public ChainBuilder links(int n, String... actions) {
         for (int i = 0; i < n; i++) {
             Link link = new Link();
-            int number = links.size() + 1;
+            int number = walletLinks + links.size() + 1;
             link.delegatePayload.put("vct", "urn:eudi-test:business:agent-mandate:1");
             link.delegatePayload.put("iat", now - 100);
             link.delegatePayload.put("exp", now + 3600);
@@ -164,14 +183,15 @@ public final class ChainBuilder {
     }
 
     public Link link(int number) {
-        return links.get(number - 1);
-    }
-
-    public KeyWrapper lastAgent() {
-        return links.isEmpty() ? holder : links.get(links.size() - 1).agent;
+        return links.get(number - walletLinks - 1);
     }
 
     public String build() {
+        if (walletChain != null) {
+            String segment = walletChain.substring(lastJwtStart(walletChain));
+            return continueChain(
+                    new StringBuilder(walletChain), segment, segment.substring(0, segment.indexOf('~')), walletAgent);
+        }
         ObjectNode payload = credentialClaims.deepCopy();
         payload.set("cnf", cnf(holder));
         payload.put("_sd_alg", credentialSdAlg);
@@ -182,13 +202,14 @@ public final class ChainBuilder {
             disclosures.add(disclosure);
             sd.add(digest(disclosure));
         });
-        String jwt = sign(issuer, credentialType, payload, credentialX5c);
+        String jwt = sign(issuer, credentialType, payload);
         List<String> shown = credentialDisclosureOverride != null ? credentialDisclosureOverride : disclosures;
-        StringBuilder chain = new StringBuilder(segment(jwt, shown));
-        String precedingSegment = chain.toString();
-        String precedingJwt = jwt;
-        KeyWrapper precedingKey = holder;
+        String segment = segment(jwt, shown);
+        return continueChain(new StringBuilder(segment), segment, jwt, holder);
+    }
 
+    private String continueChain(
+            StringBuilder chain, String precedingSegment, String precedingJwt, KeyWrapper precedingKey) {
         for (Link link : links) {
             ObjectNode delegate = link.delegatePayload.deepCopy();
             if (link.withCnf) {
@@ -266,6 +287,19 @@ public final class ChainBuilder {
 
     public JWK issuerJwk() {
         return publicJwk(issuer);
+    }
+
+    /** Trusts these keys for this issuer, as the trustedIssuerJwks setting of the identity provider does. */
+    public static IssuerKeyResolver trust(String issuer, JWK... keys) {
+        DelegateSdJwtIdentityProviderConfig config = new DelegateSdJwtIdentityProviderConfig();
+        try {
+            config.setConfig(Map.of(
+                    DelegateSdJwtIdentityProviderConfig.TRUSTED_ISSUER_JWKS,
+                    JsonSerialization.writeValueAsString(Map.of(issuer, Map.of("keys", List.of(keys))))));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+        return new TrustedIssuerKeys(new DelegateSdJwtIdentityProvider(null, config));
     }
 
     public static KeyWrapper ecKey() {
@@ -348,6 +382,23 @@ public final class ChainBuilder {
         StringBuilder segment = new StringBuilder(jwt).append('~');
         disclosures.forEach(disclosure -> segment.append(disclosure).append('~'));
         return segment.toString();
+    }
+
+    private static boolean isJwt(String component) {
+        return component.chars().filter(c -> c == '.').count() == 2;
+    }
+
+    private static int lastJwtStart(String chain) {
+        String[] components = chain.split("~", -1);
+        int offset = chain.length();
+        for (int i = components.length - 1; i >= 0; i--) {
+            offset -= components[i].length();
+            if (isJwt(components[i])) {
+                return offset;
+            }
+            offset--;
+        }
+        throw new IllegalArgumentException("the chain has no JWT");
     }
 
     private static String salt() {

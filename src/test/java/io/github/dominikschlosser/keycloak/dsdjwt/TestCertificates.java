@@ -29,8 +29,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Date;
-import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.BasicConstraints;
@@ -43,7 +41,8 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.keycloak.broker.provider.TrustMaterialIdentityProvider;
-import org.keycloak.broker.provider.X509TrustMaterial;
+import org.keycloak.broker.trust.DefaultTrustIdentityProvider;
+import org.keycloak.broker.trust.DefaultTrustIdentityProviderConfig;
 import org.keycloak.crypto.KeyWrapper;
 
 /** A test CA that issues signing certificates to credential issuers. */
@@ -70,16 +69,15 @@ public final class TestCertificates {
         }
     }
 
-    /** A trust material identity provider with this CA as its only X.509 trust anchor. */
-    @SuppressWarnings("unchecked")
+    /**
+     * Keycloak's default trust provider with this CA as its only X.509 trust anchor. It reads no
+     * session for X.509 trust.
+     */
     public TrustMaterialIdentityProvider<?> trustMaterial() {
-        X509TrustMaterial material = new X509TrustMaterial(Set.of(certificate), List.of());
-        return Stubs.stub(TrustMaterialIdentityProvider.class, (method, args) -> switch (method) {
-            case "validateX509Chain" ->
-                TrustMaterialIdentityProvider.validateX509Chain(
-                        List.of(material), (List<String>) args[1], (String) args[2]);
-            default -> throw new UnsupportedOperationException(method);
-        });
+        DefaultTrustIdentityProviderConfig config = new DefaultTrustIdentityProviderConfig();
+        config.getConfig().put(DefaultTrustIdentityProviderConfig.USE_X509, "true");
+        config.setTrustedCertificates(pem());
+        return new DefaultTrustIdentityProvider(null, config);
     }
 
     /** Issues a signing certificate for this key with these subject alternative names. */
@@ -107,14 +105,26 @@ public final class TestCertificates {
     }
 
     public String pem() {
+        return pem(certificate);
+    }
+
+    public static String pem(X509Certificate certificate) {
         try {
-            return "-----BEGIN CERTIFICATE-----\n"
-                    + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.US_ASCII))
-                            .encodeToString(certificate.getEncoded())
-                    + "\n-----END CERTIFICATE-----\n";
+            return pem("CERTIFICATE", certificate.getEncoded());
         } catch (CertificateEncodingException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    public static String pem(PrivateKey key) {
+        return pem("PRIVATE KEY", key.getEncoded());
+    }
+
+    private static String pem(String type, byte[] der) {
+        return "-----BEGIN " + type + "-----\n"
+                + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.US_ASCII))
+                        .encodeToString(der)
+                + "\n-----END " + type + "-----\n";
     }
 
     private static X509v3CertificateBuilder builder(X500Name issuer, X500Name subject, PublicKey key) {

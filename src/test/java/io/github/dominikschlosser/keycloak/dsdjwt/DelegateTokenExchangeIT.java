@@ -24,12 +24,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.dominikschlosser.eudi.Credential;
+import io.github.dominikschlosser.eudi.EudiWalletContainer;
+import io.github.dominikschlosser.eudi.IssueRequest;
+import io.github.dominikschlosser.eudi.WalletClient;
+import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.PrivateKey;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -46,14 +54,19 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.keycloak.common.crypto.CryptoIntegration;
 import org.keycloak.crypto.KeyWrapper;
+import org.keycloak.jose.jwk.JWK;
+import org.keycloak.jose.jwk.JWKBuilder;
 import org.keycloak.util.JsonSerialization;
-import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.Network;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.MountableFile;
 
-/** Runs the token exchange against Keycloak with the provider JAR installed. */
+/**
+ * Runs the token exchange against Keycloak with the provider JAR installed. An eudi-dev wallet
+ * issues the credentials and signs the first delegation. The test acts as the agent.
+ */
 class DelegateTokenExchangeIT {
 
     private static final String TOKEN_TYPE = "urn:eudi-dev:params:oauth:token-type:dsd-jwt-kb";
@@ -67,40 +80,88 @@ class DelegateTokenExchangeIT {
     private static final String PUBLIC_AGENT = "public-agent";
     private static final String SHARED_AGENT = "shared-agent";
     private static final String DISABLED_IDP_AGENT = "disabled-idp-agent";
-    private static final String X509_AGENT = "x509-agent";
+    private static final String STATUS_AGENT = "status-agent";
+    private static final String KEYS_AGENT = "keys-agent";
+    private static final String UNKNOWN_KEYS_AGENT = "unknown-keys-agent";
     private static final int NONCE_LIFESPAN = 10;
-    private static final String UNREACHABLE_STATUS_LIST = "https://localhost:1/status/1";
     private static final String API = "invoice-api";
     private static final String CLIENT_SECRET = UUID.randomUUID().toString();
-    private static final KeyWrapper ISSUER = ChainBuilder.ecKey();
-    private static final TestCertificates ISSUER_CA = new TestCertificates("Register CA");
     private static final HttpClient HTTP = HttpClient.newHttpClient();
 
+    private static final String WALLET_ISSUER = "https://wallet:8086";
+    private static final String UNREACHABLE_STATUS_LIST = "https://wallet:1/statuslist";
+    private static final String POA = "urn:eudi-test:business:poa:1";
+    private static final String COLLIDING_PRINCIPAL = "DEACME.HRB9";
+
+    private static Network network;
+    private static EudiWalletContainer wallet;
+    private static WalletClient walletClient;
     private static GenericContainer<?> keycloak;
-    private static StatusListServer statusList;
     private static String baseUrl;
     private static String realmIssuer;
-    private static final String COLLIDING_PRINCIPAL = "DETEST.HRB9";
+
+    private static Credential acme;
+    private static Credential bolt;
+    private static Credential colliding;
+    private static Credential withStatus;
+    private static Credential revoked;
+    private static Credential unreachableStatus;
+    private static Credential untrusted;
 
     @BeforeAll
     @SuppressWarnings("resource")
-    static void startKeycloak() throws Exception {
+    static void start() throws Exception {
         CryptoIntegration.init(DelegateTokenExchangeIT.class.getClassLoader());
-        statusList = new StatusListServer("host.testcontainers.internal", ISSUER);
-        Testcontainers.exposeHostPorts(statusList.port());
+        network = Network.newNetwork();
+        wallet = new EudiWalletContainer()
+                .withoutDefaultPid()
+                .withStatusList()
+                .withDelegateSdJwt()
+                .withNetwork(network)
+                .withNetworkAliases("wallet")
+                .withBaseUrl("http://wallet:8085");
+        wallet.start();
+        walletClient = wallet.client();
+
+        acme = issue(
+                ChainBuilder.PRINCIPAL,
+                "Acme Logistics GmbH",
+                List.of("invoice.approve", "order.create", "fleet.sell", "realm.manage"),
+                "");
+        bolt = issue("NLBOLT.KVK1234", "Bolt Supplies B.V.", List.of("order.create"), "");
+        colliding = issue(COLLIDING_PRINCIPAL, "Acme Logistics GmbH", List.of("invoice.approve"), "");
+        withStatus = issue("DEACME.HRB4712", "Acme Logistics GmbH", List.of("invoice.approve"), null);
+        revoked = issue("DEACME.HRB4713", "Acme Logistics GmbH", List.of("invoice.approve"), null);
+        unreachableStatus =
+                issue("DEACME.HRB4714", "Acme Logistics GmbH", List.of("invoice.approve"), UNREACHABLE_STATUS_LIST);
+        KeyWrapper untrustedKey = ChainBuilder.ecKey();
+        TestCertificates otherCa = new TestCertificates("Crate Test CA");
+        untrusted = walletClient.issueCredential(
+                request("DEACME.HRB4715", "Acme Logistics GmbH", List.of("invoice.approve"), "")
+                        .signedBy(
+                                TestCertificates.pem((PrivateKey) untrustedKey.getPrivateKey()),
+                                TestCertificates.pem(otherCa.issue(
+                                                "Acme Logistics GmbH",
+                                                untrustedKey,
+                                                TestCertificates.uri(WALLET_ISSUER),
+                                                TestCertificates.dns("wallet")))
+                                        + otherCa.pem()));
+
         keycloak = new GenericContainer<>("quay.io/keycloak/keycloak:" + System.getProperty("keycloak.version"))
+                .withNetwork(network)
                 .withCopyFileToContainer(
                         MountableFile.forHostPath(System.getProperty("provider.jar")),
                         "/opt/keycloak/providers/keycloak-delegate-sdjwt.jar")
                 .withCopyToContainer(
                         Transferable.of(JsonSerialization.writeValueAsBytes(realm())),
                         "/opt/keycloak/data/import/" + REALM + ".json")
-                .withCopyToContainer(Transferable.of(statusList.certificatePem()), "/opt/keycloak/conf/status-list.pem")
+                .withCopyToContainer(
+                        Transferable.of(walletClient.getTlsCertificatePem()), "/opt/keycloak/conf/wallet-tls.pem")
                 .withCommand(
                         "start-dev",
                         "--import-realm",
                         "--features=oid4vc-vci",
-                        "--truststore-paths=/opt/keycloak/conf/status-list.pem",
+                        "--truststore-paths=/opt/keycloak/conf/wallet-tls.pem",
                         "--spi-realm-restapi-extension--delegate-sd-jwt--nonce-lifespan=" + NONCE_LIFESPAN)
                 .withExposedPorts(8080)
                 .waitingFor(Wait.forHttp("/realms/" + REALM).forPort(8080).withStartupTimeout(Duration.ofMinutes(4)));
@@ -110,21 +171,43 @@ class DelegateTokenExchangeIT {
     }
 
     @AfterAll
-    static void stopKeycloak() {
+    static void stop() {
         if (keycloak != null) {
             keycloak.stop();
         }
-        if (statusList != null) {
-            statusList.close();
+        if (wallet != null) {
+            wallet.stop();
         }
+        if (network != null) {
+            network.close();
+        }
+    }
+
+    @Test
+    void walletNamesItsNetworkAliasInIssuerCertificateAndStatusList() throws Exception {
+        assertEquals(WALLET_ISSUER, acme.claims().get("iss"));
+        X509Certificate leaf = leaf(header(acme.raw()));
+        assertTrue(
+                leaf.getSubjectAlternativeNames().contains(List.of(6, WALLET_ISSUER)),
+                leaf.getSubjectAlternativeNames().toString());
+        assertTrue(
+                JsonSerialization.mapper
+                        .valueToTree(withStatus.claims())
+                        .at("/status/status_list/uri")
+                        .asText()
+                        .startsWith(WALLET_ISSUER + "/"),
+                withStatus.claims().toString());
     }
 
     @Test
     void exchangesChainForTokenWithRolesClaimsAndActor() throws Exception {
         for (int links : new int[] {1, 2, 4}) {
-            ChainBuilder chain = chain(AGENT).links(links, "invoice.approve", "order.create");
+            String chain = delegate(acme, "invoice.approve", "order.create")
+                    .toAgent(AGENT)
+                    .links(links - 1, "invoice.approve", "order.create")
+                    .build();
 
-            JsonNode response = exchange(AGENT, chain.build(), Map.of());
+            JsonNode response = exchange(AGENT, chain, Map.of());
 
             assertEquals(200, response.get("status").asInt(), response.toString());
             assertEquals(
@@ -135,7 +218,8 @@ class DelegateTokenExchangeIT {
             assertFalse(response.has("id_token"), response.toString());
             JsonNode token = claims(response.get("access_token").asText());
             assertEquals(realmIssuer, token.get("iss").asText());
-            assertEquals(principalSubject(), token.get("sub").asText());
+            assertEquals(
+                    principalSubject(ChainBuilder.PRINCIPAL), token.get("sub").asText());
             assertEquals(AGENT, token.get("azp").asText());
             assertEquals(API, token.get("aud").asText());
             assertEquals("Bearer", token.get("typ").asText());
@@ -150,14 +234,12 @@ class DelegateTokenExchangeIT {
             assertEquals("EUR", token.at("/approval_limit/currency").asText());
             assertEquals("2500.00", token.at("/approval_limit/amount").asText());
             assertEquals(JsonSerialization.mapper.valueToTree(actor(links)), token.get("act"));
-            assertTrue(token.get("exp").asLong() <= chain.now + 3600);
         }
     }
 
     @Test
     void grantsOnlyRolesOfDelegatedActions() throws Exception {
-        JsonNode response = exchange(
-                AGENT, chain(AGENT).links(1, "invoice.approve", "fleet.sell").build(), Map.of());
+        JsonNode response = exchange(AGENT, chain(AGENT, acme, "invoice.approve", "fleet.sell"), Map.of());
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         JsonNode token = claims(response.get("access_token").asText());
@@ -168,10 +250,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void ignoresProtocolMappersOfTheClient() throws Exception {
-        JsonNode response = exchange(
-                FIXED_ROLE_AGENT,
-                chain(FIXED_ROLE_AGENT).links(1, "invoice.approve").build(),
-                Map.of());
+        JsonNode response = exchange(FIXED_ROLE_AGENT, chain(FIXED_ROLE_AGENT, acme, "invoice.approve"), Map.of());
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         JsonNode token = claims(response.get("access_token").asText());
@@ -181,10 +260,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void grantsOnlyActionsTheCredentialAllows() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve", "order.create");
-        chain.credentialActions.removeAll().add("order.create");
-
-        JsonNode response = exchange(AGENT, chain.build(), Map.of());
+        JsonNode response = exchange(AGENT, chain(AGENT, bolt, "invoice.approve", "order.create"), Map.of());
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         JsonNode token = claims(response.get("access_token").asText());
@@ -193,8 +269,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void issuesTokenForRequestedAudience() throws Exception {
-        JsonNode response =
-                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of("audience", API));
+        JsonNode response = exchange(AGENT, chain(AGENT, acme, "invoice.approve"), Map.of("audience", API));
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         JsonNode audience = claims(response.get("access_token").asText()).get("aud");
@@ -204,7 +279,7 @@ class DelegateTokenExchangeIT {
     @Test
     void refusesAudienceTheDelegationGrantsNoRoleOf() throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of("audience", LEDGER_AGENT)),
+                exchange(AGENT, chain(AGENT, acme, "invoice.approve"), Map.of("audience", LEDGER_AGENT)),
                 400,
                 "invalid_request",
                 "the delegation grants no role of the audience " + LEDGER_AGENT);
@@ -213,10 +288,7 @@ class DelegateTokenExchangeIT {
     @Test
     void refusesMapperThatCannotMapADelegation() throws Exception {
         assertRefused(
-                exchange(
-                        FOREIGN_AGENT,
-                        chain(FOREIGN_AGENT).links(1, "invoice.approve").build(),
-                        Map.of()),
+                exchange(FOREIGN_AGENT, chain(FOREIGN_AGENT, acme, "invoice.approve"), Map.of()),
                 500,
                 "server_error",
                 "the Delegate SD-JWT identity provider is misconfigured: the mapper fixed role of type"
@@ -225,8 +297,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void introspectionReportsTheTokenInactive() throws Exception {
-        JsonNode response =
-                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of());
+        JsonNode response = exchange(AGENT, chain(AGENT, acme, "invoice.approve"), Map.of());
         assertEquals(200, response.get("status").asInt(), response.toString());
 
         JsonNode introspection = post(
@@ -245,8 +316,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void userinfoRefusesExchangedToken() throws Exception {
-        JsonNode exchanged =
-                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of());
+        JsonNode exchanged = exchange(AGENT, chain(AGENT, acme, "invoice.approve"), Map.of());
         assertEquals(200, exchanged.get("status").asInt(), exchanged.toString());
         HttpRequest request = HttpRequest.newBuilder(URI.create(realmIssuer + "/protocol/openid-connect/userinfo"))
                 .header(
@@ -263,10 +333,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesPrincipalWhoseSubjectIsAStoredUserId() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
-        chain.credentialDisclosures.put("euid_reference", ChainBuilder.text(COLLIDING_PRINCIPAL));
-
-        JsonNode response = exchange(AGENT, chain.build(), Map.of());
+        JsonNode response = exchange(AGENT, chain(AGENT, colliding, "invoice.approve"), Map.of());
 
         assertRefused(response, 500, "server_error", null);
         assertTrue(response.get("error_description").asText().contains("own roles"), response.toString());
@@ -274,20 +341,20 @@ class DelegateTokenExchangeIT {
 
     @Test
     void capsTokenLifetimeAtChainExpiry() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
-        chain.link(1).delegatePayload.put("exp", chain.now + 60);
+        Delegation delegation = delegate(acme, "invoice.approve");
+        long expiry = now() + 60;
+        delegation.payload.put("exp", expiry);
 
-        JsonNode response = exchange(AGENT, chain.build(), Map.of());
+        JsonNode response = exchange(AGENT, delegation.toAgent(AGENT).build(), Map.of());
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         assertTrue(response.get("expires_in").asLong() <= 60, response.toString());
-        assertTrue(claims(response.get("access_token").asText()).get("exp").asLong() <= chain.now + 60);
+        assertTrue(claims(response.get("access_token").asText()).get("exp").asLong() <= expiry);
     }
 
     @Test
     void refusesMalformedSubjectTokens() throws Exception {
-        String chain = chain(AGENT).links(1, "invoice.approve").build();
-        String[] parts = chain.split("~", -1);
+        String[] parts = chain(AGENT, acme, "invoice.approve").split("~", -1);
         parts[1] = "!!not-base64!!";
 
         for (String token : List.of("x", "a.b.c~", String.join("~", parts))) {
@@ -297,41 +364,41 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesCredentialWithUnreachableStatusList() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
-        statusListEntry(chain, UNREACHABLE_STATUS_LIST, 7);
-
         assertRefused(
-                exchange(AGENT, chain.build(), Map.of()),
+                exchange(AGENT, chain(AGENT, unreachableStatus, "invoice.approve"), Map.of()),
                 400,
                 "invalid_request",
                 "the status list at " + UNREACHABLE_STATUS_LIST + " could not be loaded");
     }
 
     @Test
-    void refusesInvalidCredential() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
-        statusListEntry(chain, statusList.uri(), StatusListServer.INVALID_INDEX);
+    void refusesRevokedCredential() throws Exception {
+        Delegation delegation = delegate(revoked, "invoice.approve");
+        JsonNode before =
+                exchange(STATUS_AGENT, delegation.toAgent(STATUS_AGENT).build(), Map.of());
+        assertEquals(200, before.get("status").asInt(), before.toString());
+
+        walletClient.revokeCredential(revoked.id());
 
         assertRefused(
-                exchange(AGENT, chain.build(), Map.of()),
+                exchange(STATUS_AGENT, delegation.toAgent(STATUS_AGENT).build(), Map.of()),
                 400,
                 "invalid_request",
                 "the credential is invalid (status 1)");
+        JsonNode other = exchange(STATUS_AGENT, chain(STATUS_AGENT, withStatus, "invoice.approve"), Map.of());
+        assertEquals(200, other.get("status").asInt(), other.toString());
     }
 
     @Test
     void acceptsCredentialWithValidStatus() throws Exception {
-        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
-        statusListEntry(chain, statusList.uri(), StatusListServer.VALID_INDEX);
-
-        JsonNode response = exchange(AGENT, chain.build(), Map.of());
+        JsonNode response = exchange(STATUS_AGENT, chain(STATUS_AGENT, withStatus, "invoice.approve"), Map.of());
 
         assertEquals(200, response.get("status").asInt(), response.toString());
     }
 
     @Test
     void refusesReplayedNonce() throws Exception {
-        String chain = chain(AGENT).links(1, "invoice.approve").build();
+        String chain = chain(AGENT, acme, "invoice.approve");
 
         assertEquals(200, exchange(AGENT, chain, Map.of()).get("status").asInt());
         assertRefused(
@@ -343,7 +410,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesExpiredNonce() throws Exception {
-        String chain = chain(AGENT).links(1, "invoice.approve").build();
+        String chain = chain(AGENT, acme, "invoice.approve");
 
         Thread.sleep(Duration.ofSeconds(NONCE_LIFESPAN + 2));
 
@@ -356,112 +423,100 @@ class DelegateTokenExchangeIT {
 
     @Test
     void refusesNonceOfAnotherClientAndKeepsItForItsOwner() throws Exception {
+        Delegation delegation = delegate(acme, "invoice.approve").presented();
         String nonce = nonce(LEDGER_AGENT);
-        ChainBuilder chain = chain(AGENT).links(1, "invoice.approve");
-        chain.keyBindingClaims.put("nonce", nonce);
 
         assertRefused(
-                exchange(AGENT, chain.build(), Map.of()),
+                exchange(AGENT, delegation.withNonce(nonce).build(), Map.of()),
                 400,
                 "invalid_request",
                 "the nonce of the Key Binding JWT is unknown, expired, already used or issued to another client");
-        ChainBuilder own = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice.approve");
-        assertEquals(
-                200, exchange(LEDGER_AGENT, own.build(), Map.of()).get("status").asInt());
+        JsonNode response = exchange(LEDGER_AGENT, delegation.withNonce(nonce).build(), Map.of());
+        assertEquals(200, response.get("status").asInt(), response.toString());
     }
 
     @Test
     void keepsTheNonceWhenTheChainHidesThePrincipal() throws Exception {
+        Delegation hidden = delegate(bolt, "order.create").hidingPrincipal().presented();
+        Delegation shown = delegate(bolt, "order.create").presented();
         String nonce = nonce(AGENT);
-        ChainBuilder hidden = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice.approve");
-        hidden.credentialDisclosures.remove("euid_reference");
 
         assertRefused(
-                exchange(AGENT, hidden.build(), Map.of()),
+                exchange(AGENT, hidden.withNonce(nonce).build(), Map.of()),
                 400,
                 "invalid_request",
                 "the credential has no text claim euid_reference for the principal");
-        ChainBuilder shown = new ChainBuilder(now(), realmIssuer, nonce, ISSUER).links(1, "invoice.approve");
-        assertEquals(200, exchange(AGENT, shown.build(), Map.of()).get("status").asInt());
+        JsonNode response = exchange(AGENT, shown.withNonce(nonce).build(), Map.of());
+        assertEquals(200, response.get("status").asInt(), response.toString());
     }
 
     @Test
     void refusesADelegationWithoutTheValueOfARequiredClaimMapper() throws Exception {
-        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice.approve");
-        chain.link(1).delegatePayload.withObjectProperty("mandate").remove("limit");
+        Delegation delegation = delegate(acme, "invoice.approve");
+        delegation.payload.withObjectProperty("mandate").remove("limit");
 
         assertRefused(
-                exchange(LEDGER_AGENT, chain.build(), Map.of()),
+                exchange(LEDGER_AGENT, delegation.toAgent(LEDGER_AGENT).build(), Map.of()),
                 400,
                 "invalid_request",
                 "the first Delegate Payload has no mandate.limit, which mapper limit requires");
-    }
-
-    @Test
-    void refusesARequiredValueWhoseNestedDisclosureTheAgentLeavesOut() throws Exception {
-        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice.approve");
-        ChainBuilder.discloseSeparately(
-                chain.link(1).delegatePayload.withObjectProperty("mandate").withObjectProperty("limit"), "amount");
-
-        assertRefused(
-                exchange(LEDGER_AGENT, chain.build(), Map.of()),
-                400,
-                "invalid_request",
-                "the first Delegate Payload has no mandate.limit, which mapper limit requires");
-    }
-
-    @Test
-    void mapsARequiredValueWithItsNestedDisclosure() throws Exception {
-        ChainBuilder chain = chain(LEDGER_AGENT).links(1, "invoice.approve");
-        chain.link(1)
-                .extraDisclosures
-                .add(ChainBuilder.discloseSeparately(
-                        chain.link(1)
-                                .delegatePayload
-                                .withObjectProperty("mandate")
-                                .withObjectProperty("limit"),
-                        "amount"));
-
-        JsonNode response = exchange(LEDGER_AGENT, chain.build(), Map.of());
-
-        assertEquals(200, response.get("status").asInt(), response.toString());
-        assertEquals(
-                "2500.00",
-                claims(response.get("access_token").asText())
-                        .at("/approval_limit/amount")
-                        .asText());
     }
 
     @Test
     void acceptsAnIssuerCertificateThatNamesTheIssuer() throws Exception {
-        KeyWrapper key = ChainBuilder.ecKey();
-        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, nonce(X509_AGENT), key).links(1, "invoice.approve");
-        chain.credentialX5c =
-                List.of(ISSUER_CA.issue("Acme Logistics GmbH", key, TestCertificates.uri("https://register.example")));
-
-        JsonNode response = exchange(X509_AGENT, chain.build(), Map.of());
+        JsonNode response = exchange(LEDGER_AGENT, chain(LEDGER_AGENT, acme, "invoice.approve"), Map.of());
 
         assertEquals(200, response.get("status").asInt(), response.toString());
         assertEquals(
-                principalSubject(),
+                principalSubject(ChainBuilder.PRINCIPAL),
                 claims(response.get("access_token").asText()).get("sub").asText());
     }
 
     @Test
-    void refusesUntrustedIssuer() throws Exception {
-        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, nonce(AGENT)).links(1, "invoice.approve");
+    void refusesAnIssuerCertificateOfAnotherCaWithoutFallingBackToKeys() throws Exception {
+        JsonNode response = exchange(AGENT, chain(AGENT, untrusted, "invoice.approve"), Map.of());
+
+        assertRefused(response, 400, "invalid_request", null);
+        assertTrue(
+                response.get("error_description")
+                        .asText()
+                        .startsWith("the x5c certificate chain of the issuer is not trusted: "),
+                response.toString());
+    }
+
+    @Test
+    void refusesAnIssuerKeyThatIsNotTrusted() throws Exception {
+        assertEquals(WALLET_ISSUER, untrusted.claims().get("iss"));
 
         assertRefused(
-                exchange(AGENT, chain.build(), Map.of()),
+                exchange(STATUS_AGENT, chain(STATUS_AGENT, untrusted, "invoice.approve"), Map.of()),
                 400,
                 "invalid_request",
-                "the SD-JWT: Invalid Issuer-Signed JWT: Signature could not be verified");
+                "no trusted key of the credential issuer was found");
+    }
+
+    @Test
+    void acceptsIssuerKeysOfATrustProviderThatNamesTheIssuer() throws Exception {
+        for (Credential credential : List.of(acme, untrusted)) {
+            JsonNode response = exchange(KEYS_AGENT, chain(KEYS_AGENT, credential, "invoice.approve"), Map.of());
+
+            assertEquals(200, response.get("status").asInt(), response.toString());
+        }
+    }
+
+    @Test
+    void ignoresIssuerKeysOfTrustProvidersThatAreDisabledOrNameAnotherIssuer() throws Exception {
+        assertRefused(
+                exchange(UNKNOWN_KEYS_AGENT, chain(UNKNOWN_KEYS_AGENT, acme, "invoice.approve"), Map.of()),
+                400,
+                "invalid_request",
+                "no trusted key of the credential issuer was found");
     }
 
     @Test
     void refusesDelegationWithoutMappedAction() throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "fleet.sell").build(), Map.of()),
+                exchange(AGENT, chain(AGENT, acme, "fleet.sell"), Map.of()),
                 400,
                 "invalid_request",
                 "the delegation allows no action that a mapper grants a role for");
@@ -471,7 +526,7 @@ class DelegateTokenExchangeIT {
     @ValueSource(strings = {"openid", "profile"})
     void refusesScope(String scope) throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of("scope", scope)),
+                exchange(AGENT, chain(AGENT, acme, "invoice.approve"), Map.of("scope", scope)),
                 400,
                 "invalid_scope",
                 "the parameter scope is not supported with a Delegate SD-JWT");
@@ -482,7 +537,7 @@ class DelegateTokenExchangeIT {
             strings = {"urn:ietf:params:oauth:token-type:refresh_token", "urn:ietf:params:oauth:token-type:id_token"})
     void refusesOtherTokenTypesThanAccessToken(String type) throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of("requested_token_type", type)),
+                exchange(AGENT, chain(AGENT, acme, "invoice.approve"), Map.of("requested_token_type", type)),
                 400,
                 "invalid_request",
                 "the requested_token_type " + type + " is not supported with a Delegate SD-JWT");
@@ -492,7 +547,7 @@ class DelegateTokenExchangeIT {
     @ValueSource(strings = {"actor_token", "requested_subject", "requested_issuer", "subject_issuer"})
     void refusesParametersTheChainReplaces(String parameter) throws Exception {
         assertRefused(
-                exchange(AGENT, chain(AGENT).links(1, "invoice.approve").build(), Map.of(parameter, "x")),
+                exchange(AGENT, chain(AGENT, acme, "invoice.approve"), Map.of(parameter, "x")),
                 400,
                 "invalid_request",
                 "the parameter " + parameter + " is not supported with a Delegate SD-JWT");
@@ -531,9 +586,11 @@ class DelegateTokenExchangeIT {
         JsonNode nonce = post("/realms/" + REALM + "/delegate-sd-jwt/nonce", Map.of("client_id", PUBLIC_AGENT));
         assertRefused(nonce, 400, "invalid_client", "a public client cannot exchange a Delegate SD-JWT");
 
-        ChainBuilder chain = new ChainBuilder(now(), realmIssuer, "unused", ISSUER).links(1, "invoice.approve");
         assertRefused(
-                exchange(PUBLIC_AGENT, chain.build(), Map.of()),
+                exchange(
+                        PUBLIC_AGENT,
+                        delegate(acme, "invoice.approve").withNonce("unused").build(),
+                        Map.of()),
                 400,
                 "invalid_client",
                 "a public client cannot exchange a Delegate SD-JWT");
@@ -549,8 +606,7 @@ class DelegateTokenExchangeIT {
 
     @Test
     void reportsAdminRoleMapperAsServerError() throws Exception {
-        JsonNode response = exchange(
-                ADMIN_AGENT, chain(ADMIN_AGENT).links(1, "realm.manage").build(), Map.of());
+        JsonNode response = exchange(ADMIN_AGENT, chain(ADMIN_AGENT, acme, "realm.manage"), Map.of());
 
         assertRefused(response, 500, "server_error", null);
         assertTrue(response.get("error_description").asText().contains("admin role"), response.toString());
@@ -573,29 +629,155 @@ class DelegateTokenExchangeIT {
         assertNotEquals("", body.get("nonce").asText());
     }
 
-    private static ChainBuilder chain(String clientId) throws Exception {
-        return new ChainBuilder(now(), realmIssuer, nonce(clientId), ISSUER);
+    /** A delegation from the principal to a fresh agent key. The wallet signs it when the test presents it. */
+    private static final class Delegation {
+
+        final ObjectNode payload = ChainBuilder.object();
+        private final KeyWrapper agent = ChainBuilder.ecKey();
+        private final Credential credential;
+        private final ArrayNode claims = JsonSerialization.mapper.createArrayNode();
+        private String chain;
+
+        Delegation(Credential credential, String... actions) {
+            this.credential = credential;
+            payload.put("vct", "urn:eudi-test:business:agent-mandate:1");
+            payload.putObject("agent")
+                    .put("id", "urn:eudi-test:agent:procurement-1")
+                    .put("name", "Procurement agent of Alice");
+            ObjectNode mandate = payload.putObject("mandate");
+            ArrayNode delegated = mandate.putArray("actions");
+            List.of(actions).forEach(delegated::add);
+            mandate.putObject("limit").put("amount", "2500.00").put("currency", "EUR");
+            mandate.put("purpose", "Approve supplier invoices");
+            mandate.putArray("audiences").add(realmIssuer);
+            payload.putObject("cnf").set("jwk", JsonSerialization.mapper.valueToTree(ChainBuilder.publicJwk(agent)));
+            claims.addObject().putArray("path").add("legal_name");
+            ObjectNode principal = claims.addObject();
+            principal.putArray("path").add("euid_reference");
+            principal.putArray("values").add((String) credential.claims().get("euid_reference"));
+            claims.addObject()
+                    .putArray("path")
+                    .add("authorisation")
+                    .add("actions")
+                    .addNull();
+        }
+
+        /** Selects the credential by its legal name and keeps euid_reference undisclosed. */
+        Delegation hidingPrincipal() {
+            claims.remove(1);
+            ((ObjectNode) claims.get(0)).putArray("values").add((String)
+                    credential.claims().get("legal_name"));
+            return this;
+        }
+
+        /**
+         * Presents the credential in an OpenID4VP request with a delegate transaction data entry. The
+         * wallet signs the first delegation and keeps the chain.
+         */
+        Delegation presented() throws Exception {
+            if (chain != null) {
+                return this;
+            }
+            ObjectNode request = ChainBuilder.object();
+            request.put("type", "custom");
+            ObjectNode query = request.putObject("dcql_query")
+                    .putArray("credentials")
+                    .addObject()
+                    .put("id", "poa")
+                    .put("format", "dc+sd-jwt");
+            query.putObject("meta").putArray("vct_values").add(POA);
+            query.set("claims", claims);
+            ObjectNode delegate = request.putArray("transaction_data").addObject();
+            delegate.put("type", "delegate");
+            delegate.putArray("credential_ids").add("poa");
+            delegate.put("format", "dSD-JWT+KB");
+            delegate.set("delegate_payload", payload);
+            HttpResponse<String> created = HTTP.send(
+                    HttpRequest.newBuilder(URI.create(wallet.getBaseUrl() + "/verifier/api/requests"))
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(JsonSerialization.writeValueAsString(request)))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(201, created.statusCode(), created.body());
+
+            String presented = walletClient
+                    .acceptPresentationRequest(JsonSerialization.mapper
+                            .readTree(created.body())
+                            .get("scheme_uri")
+                            .asText())
+                    .status();
+            assertEquals("submitted", presented);
+            // The wallet keeps every delegation of a credential. The agent key identifies this one.
+            String agentX = JsonSerialization.mapper
+                    .valueToTree(ChainBuilder.publicJwk(agent))
+                    .get("x")
+                    .asText();
+            chain = walletClient.getDelegations(credential.id()).stream()
+                    .filter(record ->
+                            agentX.equals(record.delegates().get(0).jwk().get("x")))
+                    .findFirst()
+                    .orElseThrow()
+                    .chain();
+            return this;
+        }
+
+        ChainBuilder withNonce(String nonce) throws Exception {
+            return ChainBuilder.fromWallet(presented().chain, agent, now(), realmIssuer, nonce);
+        }
+
+        ChainBuilder toAgent(String clientId) throws Exception {
+            return withNonce(nonce(clientId));
+        }
     }
 
-    private static String principalSubject() {
-        return principalSubject(ChainBuilder.PRINCIPAL);
+    private static Delegation delegate(Credential credential, String... actions) {
+        return new Delegation(credential, actions);
+    }
+
+    private static String chain(String clientId, Credential credential, String... actions) throws Exception {
+        return delegate(credential, actions).toAgent(clientId).build();
+    }
+
+    /** An empty status list URI makes the wallet leave out the status claim. Null takes the wallet status list. */
+    private static Credential issue(String principal, String legalName, List<String> actions, String statusList) {
+        return walletClient.issueCredential(request(principal, legalName, actions, statusList));
+    }
+
+    private static IssueRequest request(String principal, String legalName, List<String> actions, String statusList) {
+        IssueRequest request = IssueRequest.sdJwt(POA)
+                .claims(Map.of(
+                        "legal_name", legalName,
+                        "euid_reference", principal,
+                        "authorisation", Map.of("actions", actions)));
+        return statusList == null ? request : request.statusList(statusList, 0);
+    }
+
+    private static JsonNode header(String jwt) throws Exception {
+        return JsonSerialization.mapper.readTree(Base64.getUrlDecoder().decode(jwt.split("\\.")[0]));
+    }
+
+    private static X509Certificate leaf(JsonNode header) throws Exception {
+        return (X509Certificate) CertificateFactory.getInstance("X.509")
+                .generateCertificate(new ByteArrayInputStream(
+                        Base64.getDecoder().decode(header.get("x5c").get(0).asText())));
+    }
+
+    /** The key of the x5c leaf of the JWT, with the kid of its header. */
+    private static JWK headerKey(String jwt) throws Exception {
+        JsonNode header = header(jwt);
+        return JWKBuilder.create()
+                .kid(header.path("kid").asText(null))
+                .algorithm("ES256")
+                .ec(leaf(header).getPublicKey());
     }
 
     private static String principalSubject(String principal) {
-        return UUID.nameUUIDFromBytes(("https://register.example|" + principal).getBytes(StandardCharsets.UTF_8))
+        return UUID.nameUUIDFromBytes((WALLET_ISSUER + "|" + principal).getBytes(StandardCharsets.UTF_8))
                 .toString();
     }
 
     private static long now() {
         return Instant.now().getEpochSecond();
-    }
-
-    private static void statusListEntry(ChainBuilder chain, String uri, int index) {
-        chain.credentialClaims
-                .putObject("status")
-                .putObject("status_list")
-                .put("idx", index)
-                .put("uri", uri);
     }
 
     private static List<String> fieldNames(JsonNode object) {
@@ -677,7 +859,9 @@ class DelegateTokenExchangeIT {
                 PUBLIC_AGENT,
                 SHARED_AGENT,
                 DISABLED_IDP_AGENT,
-                X509_AGENT)) {
+                STATUS_AGENT,
+                KEYS_AGENT,
+                UNKNOWN_KEYS_AGENT)) {
             ObjectNode client = clients.addObject();
             client.put("clientId", clientId);
             client.put("publicClient", clientId.equals(PUBLIC_AGENT));
@@ -709,34 +893,63 @@ class DelegateTokenExchangeIT {
         apiRoles.addObject().put("name", "invoice-approver");
         apiRoles.addObject().put("name", "order-creator");
 
-        ObjectNode colliding = realm.putArray("users").addObject();
-        colliding.put("id", principalSubject(COLLIDING_PRINCIPAL));
-        colliding.put("username", "carol");
-        colliding.put("enabled", true);
+        ObjectNode carol = realm.putArray("users").addObject();
+        carol.put("id", principalSubject(COLLIDING_PRINCIPAL));
+        carol.put("username", "carol");
+        carol.put("enabled", true);
 
-        String jwks = JsonSerialization.writeValueAsString(
-                Map.of("https://register.example", Map.of("keys", List.of(ChainBuilder.publicJwk(ISSUER)))));
+        JWK issuerKey = headerKey(acme.raw());
+        JWK untrustedKey = headerKey(untrusted.raw());
         ArrayNode idps = realm.putArray("identityProviders");
-        identityProvider(idps, "delegation", AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-admin", ADMIN_AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-ledger", LEDGER_AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-foreign", FOREIGN_AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-fixed-role", FIXED_ROLE_AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-public", PUBLIC_AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-shared-1", SHARED_AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-shared-2", SHARED_AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-disabled", DISABLED_IDP_AGENT, jwks, Map.of());
-        ((ObjectNode) idps.get(idps.size() - 1)).put("enabled", false);
-        ObjectNode issuerCa = idps.addObject();
-        issuerCa.put("alias", "issuer-ca");
-        issuerCa.put("providerId", "default-trust");
-        issuerCa.put("enabled", true);
-        issuerCa.putObject("config").put("useX509", "true").put("trustedCertificates", ISSUER_CA.pem());
-        identityProvider(idps, "delegation-x509", X509_AGENT, null, Map.of("trustMaterialIdps", "issuer-ca"));
+        trustProvider(
+                idps,
+                "wallet-ca",
+                null,
+                Map.of("useX509", "true", "trustedCertificates", walletClient.getCaCertificatePem()));
+        trustProvider(idps, "wallet-keys", WALLET_ISSUER, jwks(issuerKey, untrustedKey));
+        trustProvider(idps, "unnamed-keys", null, jwks(issuerKey));
+        trustProvider(idps, "other-issuer-keys", "https://register.crate.example", jwks(issuerKey));
+        trustProvider(idps, "disabled-keys", WALLET_ISSUER, jwks(issuerKey)).put("enabled", false);
+
+        Map<String, String> walletCa = Map.of("trustMaterialIdps", "wallet-ca");
+        // The certificate of the wallet status list names no issuer. X.509 trust refuses that list,
+        // so the status cases trust the keys.
+        Map<String, String> walletKeys = Map.of(
+                "trustedIssuerJwks",
+                JsonSerialization.writeValueAsString(Map.of(
+                        WALLET_ISSUER,
+                        Map.of(
+                                "keys",
+                                List.of(
+                                        issuerKey,
+                                        headerKey(walletClient.getStatusList().strip()))))));
+        identityProvider(idps, "delegation", AGENT, Map.of("trustMaterialIdps", "wallet-ca,wallet-keys"));
+        identityProvider(idps, "delegation-admin", ADMIN_AGENT, walletCa);
+        identityProvider(idps, "delegation-ledger", LEDGER_AGENT, walletCa);
+        identityProvider(idps, "delegation-foreign", FOREIGN_AGENT, walletCa);
+        identityProvider(idps, "delegation-fixed-role", FIXED_ROLE_AGENT, walletCa);
+        identityProvider(idps, "delegation-public", PUBLIC_AGENT, walletCa);
+        identityProvider(idps, "delegation-shared-1", SHARED_AGENT, walletCa);
+        identityProvider(idps, "delegation-shared-2", SHARED_AGENT, walletCa);
+        identityProvider(idps, "delegation-disabled", DISABLED_IDP_AGENT, walletCa)
+                .put("enabled", false);
+        identityProvider(idps, "delegation-status", STATUS_AGENT, walletKeys);
+        identityProvider(idps, "delegation-keys", KEYS_AGENT, Map.of("trustMaterialIdps", "wallet-keys"));
+        identityProvider(
+                idps,
+                "delegation-unknown-keys",
+                UNKNOWN_KEYS_AGENT,
+                Map.of("trustMaterialIdps", "unnamed-keys,other-issuer-keys,disabled-keys"));
 
         ArrayNode mappers = realm.putArray("identityProviderMappers");
         for (String alias : List.of(
-                "delegation", "delegation-ledger", "delegation-foreign", "delegation-fixed-role", "delegation-x509")) {
+                "delegation",
+                "delegation-ledger",
+                "delegation-foreign",
+                "delegation-fixed-role",
+                "delegation-status",
+                "delegation-keys",
+                "delegation-unknown-keys")) {
             mapper(
                     mappers,
                     alias,
@@ -778,22 +991,41 @@ class DelegateTokenExchangeIT {
         return realm;
     }
 
-    private static void identityProvider(
-            ArrayNode idps, String alias, String clientId, String jwks, Map<String, String> extra) {
+    private static Map<String, String> jwks(JWK... keys) throws Exception {
+        return Map.of(
+                "publicKeySignatureVerifier",
+                JsonSerialization.writeValueAsString(Map.of("keys", List.of(keys))),
+                "useJwksUrl",
+                "false");
+    }
+
+    private static ObjectNode trustProvider(ArrayNode idps, String alias, String issuer, Map<String, String> config) {
+        ObjectNode idp = idps.addObject();
+        idp.put("alias", alias);
+        idp.put("providerId", "default-trust");
+        idp.put("enabled", true);
+        ObjectNode values = idp.putObject("config");
+        if (issuer != null) {
+            values.put("issuer", issuer);
+        }
+        config.forEach(values::put);
+        return idp;
+    }
+
+    private static ObjectNode identityProvider(
+            ArrayNode idps, String alias, String clientId, Map<String, String> trust) {
         ObjectNode idp = idps.addObject();
         idp.put("alias", alias);
         idp.put("providerId", "delegate-sd-jwt");
         idp.put("enabled", true);
         ObjectNode config = idp.putObject("config");
         config.put("clients", clientId);
-        if (jwks != null) {
-            config.put("trustedIssuerJwks", jwks);
-        }
         config.put("principalClaim", "euid_reference");
-        config.put("credentialTypes", "urn:eudi-test:business:poa:1");
+        config.put("credentialTypes", POA);
         config.put("credentialActionsPath", "authorisation.actions");
         config.put("audiencePath", "mandate.audiences");
-        extra.forEach(config::put);
+        trust.forEach(config::put);
+        return idp;
     }
 
     private static void mapper(ArrayNode mappers, String alias, String name, String type, Map<String, String> config) {

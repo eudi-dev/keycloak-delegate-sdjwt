@@ -18,23 +18,19 @@ package io.github.dominikschlosser.keycloak.dsdjwt.idp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.dominikschlosser.keycloak.dsdjwt.ChainBuilder;
-import io.github.dominikschlosser.keycloak.dsdjwt.Stubs;
 import io.github.dominikschlosser.keycloak.dsdjwt.TestCertificates;
 import io.github.dominikschlosser.keycloak.dsdjwt.chain.ChainException;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.keycloak.broker.provider.TrustMaterialIdentityProvider;
-import org.keycloak.common.VerificationException;
 import org.keycloak.common.crypto.CryptoIntegration;
 import org.keycloak.crypto.KeyWrapper;
 import org.keycloak.jose.jws.JWSHeader;
@@ -51,8 +47,6 @@ class TrustedIssuerKeysTest {
 
     private static TestCertificates ca;
     private static KeyWrapper acmeKey;
-
-    private final List<String> calls = new ArrayList<>();
 
     @BeforeAll
     static void crypto() {
@@ -92,7 +86,7 @@ class TrustedIssuerKeysTest {
 
     @Test
     void refusesUriNameOfAnotherIssuerOnTheSameHost() throws Exception {
-        X509Certificate leaf = ca.issue("Supplier B.V.", acmeKey, TestCertificates.uri(SUPPLIER_TENANT));
+        X509Certificate leaf = ca.issue("Bolt Supplies B.V.", acmeKey, TestCertificates.uri(SUPPLIER_TENANT));
 
         ChainException e = assertThrows(ChainException.class, () -> keys().resolve(header(leaf), ACME_TENANT));
 
@@ -112,7 +106,7 @@ class TrustedIssuerKeysTest {
                 "https://issue.example#acme"
             })
     void refusesDnsNameForAnIssuerThatIsNotABareHost(String issuer) throws Exception {
-        X509Certificate leaf = ca.issue("Supplier B.V.", acmeKey, TestCertificates.dns("issue.example"));
+        X509Certificate leaf = ca.issue("Bolt Supplies B.V.", acmeKey, TestCertificates.dns("issue.example"));
 
         ChainException e = assertThrows(ChainException.class, () -> keys().resolve(header(leaf), issuer));
 
@@ -123,7 +117,7 @@ class TrustedIssuerKeysTest {
 
     @Test
     void refusesLeafOfAnotherIssuerUnderTheSameCa() throws Exception {
-        X509Certificate leaf = ca.issue("Supplier B.V.", acmeKey, TestCertificates.uri(SUPPLIER));
+        X509Certificate leaf = ca.issue("Bolt Supplies B.V.", acmeKey, TestCertificates.uri(SUPPLIER));
 
         ChainException e = assertThrows(ChainException.class, () -> keys().resolve(header(leaf), ACME));
 
@@ -153,16 +147,14 @@ class TrustedIssuerKeysTest {
     }
 
     @Test
-    void refusesAnUntrustedX5cWithoutFallingBackToKeys() throws Exception {
-        JWSHeader header = JsonSerialization.readValue("{\"alg\":\"ES256\",\"x5c\":[\"MIIB\"]}", JWSHeader.class);
+    void refusesALeafOfAnotherCa() throws Exception {
+        X509Certificate leaf =
+                new TestCertificates("Crate Test CA").issue("Acme Logistics GmbH", acmeKey, TestCertificates.uri(ACME));
 
-        ChainException e = assertThrows(
-                ChainException.class, () -> new TrustedIssuerKeys(trust()).resolve(header, "https://register.example"));
+        ChainException e = assertThrows(ChainException.class, () -> keys().resolve(header(leaf), ACME));
 
-        assertEquals(
-                "the x5c certificate chain of the issuer is not trusted: the chain does not end at a trust anchor",
-                e.getMessage());
-        assertEquals(List.of("validateX509Chain"), calls);
+        assertTrue(
+                e.getMessage().startsWith("the x5c certificate chain of the issuer is not trusted: "), e.getMessage());
     }
 
     private static TrustedIssuerKeys keys() {
@@ -175,16 +167,5 @@ class TrustedIssuerKeysTest {
 
     private static List<String> x5c(X509Certificate leaf) throws Exception {
         return List.of(Base64.getEncoder().encodeToString(leaf.getEncoded()));
-    }
-
-    private TrustMaterialIdentityProvider<?> trust() {
-        return Stubs.stub(TrustMaterialIdentityProvider.class, (method, args) -> {
-            calls.add(method);
-            return switch (method) {
-                case "validateX509Chain" -> throw new VerificationException("the chain does not end at a trust anchor");
-                case "resolveKeys" -> Stream.of(ChainBuilder.publicJwk(ChainBuilder.ecKey()));
-                default -> throw new UnsupportedOperationException(method);
-            };
-        });
     }
 }

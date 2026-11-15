@@ -179,13 +179,9 @@ A failed check returns `invalid_request` with the reason. A public client gets `
 - The status list is loaded on every exchange, without a cache.
 - A KB-SD-JWT has no status. A delegation ends when its `exp` passes.
 
-## Sample chains
+## Tests
 
-The tests use sample chains from eudi-dev. `tools/samplechains` writes them with the eudi-dev Go library (version 3.11.0 or later). The Java tests verify the same bytes.
-
-```sh
-cd tools/samplechains && go run . -out ../../src/test/resources/sample-chains
-```
+The integration tests run Keycloak and an eudi-dev wallet (version 3.11.0 or later) in Docker with [testcontainers-eudi](https://github.com/eudi-dev/testcontainers-eudi). The wallet issues the credentials and signs the first delegation. The test then acts as the agent and adds further KB-SD-JWTs and the Key Binding JWT. `mvn verify` runs them and needs Docker.
 
 ## Design decisions
 
