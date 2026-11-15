@@ -152,7 +152,7 @@ public final class ChainBuilder {
             ObjectNode limit = mandate.putObject("limit");
             limit.put("amount", "2500.00");
             limit.put("currency", "EUR");
-            mandate.put("purpose", "Approve supplier invoices of Bolt Supplies B.V.");
+            mandate.put("purpose", "Approve supplier invoices");
             ArrayNode audiences = mandate.putArray("audiences");
             audiences.add(audience);
             link.claims.put("iat", now - 50);

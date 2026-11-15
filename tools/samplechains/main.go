@@ -101,7 +101,7 @@ func build(links int) (*sampleChain, error) {
 		agent := newKey()
 		id := fmt.Sprintf("urn:eudi-test:agent:procurement-%d", i+1)
 		agents = append(agents, id)
-		purpose := disclosure("purpose", "Approve supplier invoices of Bolt Supplies B.V.")
+		purpose := disclosure("purpose", "Approve supplier invoices")
 		payload := map[string]any{
 			"vct": "urn:eudi-test:business:agent-mandate:1",
 			"iat": now - 100,

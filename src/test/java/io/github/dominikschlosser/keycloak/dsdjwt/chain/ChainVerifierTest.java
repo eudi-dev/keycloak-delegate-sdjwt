@@ -77,7 +77,7 @@ class ChainVerifierTest {
                         agents.add(link.delegatePayload().at("/agent/id").asText()));
         assertEquals(agentsOf(sample), agents);
         assertEquals(
-                "Approve supplier invoices of Bolt Supplies B.V.",
+                "Approve supplier invoices",
                 chain.links().get(0).delegatePayload().at("/mandate/purpose").asText());
     }
 

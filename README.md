@@ -4,7 +4,7 @@ A Keycloak 26.8.2 extension for AI agents. An agent sends a Delegate SD-JWT (dra
 
 ## Example
 
-Bob is an accountant at Acme Logistics GmbH. He holds a power of attorney credential for Acme. Bob delegates invoice approval to the "Procurement agent" up to 2500 EUR. The agent gets an invoice of 1840 EUR from Bolt Supplies B.V. and wants to approve it in Acme's invoice API.
+Bob is an accountant at Acme Logistics GmbH. He holds a power of attorney credential for Acme. Bob delegates invoice approval to the "Procurement agent" up to 2500 EUR. The agent gets a supplier invoice of 1840 EUR and wants to approve it in Acme's invoice API.
 
 1. Bob signs a KB-SD-JWT for the agent. Its Delegate Payload allows the action `invoice.approve` with a limit of 2500 EUR.
 2. The agent gets a nonce from Keycloak and signs a Key Binding JWT with it.
