@@ -17,7 +17,7 @@ Draft 09 also accepts a DNS name for an `iss` with a path, but then the issuers 
 
 A trailing dot on the host or on the DNS name is ignored, because `register.example.` and `register.example` name the same host.
 
-Without X.509, a trust material identity provider supplies keys from its JWKS. They count only for the issuer in the `issuer` setting of that identity provider. A disabled identity provider or one without `issuer` supplies no keys. A Default Trust identity provider has no `issuer` setting, so it must use X.509. The admin console refuses one without X.509 in `trustMaterialIdps`.
+Without X.509, a trust material identity provider supplies keys from its JWKS. They count only for the issuer in the `issuer` setting of that identity provider. A disabled identity provider or one without `issuer` supplies no keys. A Default Trust identity provider has no `issuer` setting, so it must use X.509.
 
 Without trust material identity providers, the setting `trustedIssuerJwks` holds the issuer keys inline. It maps each issuer `iss` to the JWK Set of that issuer. A key verifies only credentials whose `iss` it is listed under. An identity provider sets either `trustMaterialIdps` or `trustedIssuerJwks`, never both.
 

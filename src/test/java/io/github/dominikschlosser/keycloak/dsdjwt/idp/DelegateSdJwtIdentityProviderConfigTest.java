@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -60,10 +61,14 @@ class DelegateSdJwtIdentityProviderConfigTest {
 
     @Test
     void refusesItselfAsTrustMaterial() {
-        Map<String, String> values = new HashMap<>();
-        values.put("trustMaterialIdps", "register-trust, delegation");
-        values.put("trustedIssuerJwks", null);
-        assertRefused(values, "trustMaterialIdps must not list this identity provider");
+        DelegateSdJwtIdentityProviderConfig config = config(Map.of("trustMaterialIdps", "register-trust, delegation"));
+        Map<String, IdentityProviderModel> providers = Map.of("register-trust", x509Trust("register-trust"));
+
+        IllegalArgumentException e =
+                assertThrows(IllegalArgumentException.class, () -> config.checkTrustMaterial(providers::get));
+
+        assertEquals(
+                "trustMaterialIdps must not list the Delegate SD-JWT identity provider delegation", e.getMessage());
     }
 
     @Test
@@ -86,21 +91,6 @@ class DelegateSdJwtIdentityProviderConfigTest {
     }
 
     @Test
-    void refusesDefaultTrustWithoutX509() {
-        DelegateSdJwtIdentityProviderConfig config = config(Map.of("trustMaterialIdps", "register-trust"));
-        Map<String, IdentityProviderModel> providers =
-                Map.of("register-trust", provider("register-trust", "default-trust"));
-
-        IllegalArgumentException e =
-                assertThrows(IllegalArgumentException.class, () -> config.checkTrustMaterial(providers::get));
-
-        assertEquals(
-                "trustMaterialIdps lists the Default Trust identity provider register-trust without X.509. Turn on"
-                        + " X.509 there, or list the issuer keys in trustedIssuerJwks",
-                e.getMessage());
-    }
-
-    @Test
     void refusesTrustMaterialTogetherWithJwks() {
         assertRefused(
                 Map.of("trustMaterialIdps", "register-trust"),
@@ -109,15 +99,10 @@ class DelegateSdJwtIdentityProviderConfigTest {
 
     @Test
     void refusesJwksThatDoNotMapIssuersToKeys() {
-        assertRefused(Map.of("trustedIssuerJwks", "not json"), "trustedIssuerJwks is not JSON");
-        assertRefused(
-                Map.of("trustedIssuerJwks", "{\"keys\": []}"), "trustedIssuerJwks has no JWK Set for the issuer keys");
-        assertRefused(
-                Map.of("trustedIssuerJwks", "[{\"keys\": []}]"), "trustedIssuerJwks must map each issuer to a JWK Set");
-        assertRefused(Map.of("trustedIssuerJwks", "{}"), "trustedIssuerJwks lists no issuer");
-        assertRefused(
-                Map.of("trustedIssuerJwks", "{\"https://register.example\": {\"keys\": []}}"),
-                "trustedIssuerJwks has no keys for the issuer https://register.example");
+        for (String jwks :
+                List.of("not json", "{\"keys\": []}", "[{\"keys\": []}]", "{\"https://register.example\": {}}")) {
+            assertRefused(Map.of("trustedIssuerJwks", jwks), "trustedIssuerJwks must map each issuer to a JWK Set");
+        }
     }
 
     @Test

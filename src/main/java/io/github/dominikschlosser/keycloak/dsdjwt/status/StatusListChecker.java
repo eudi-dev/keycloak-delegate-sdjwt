@@ -17,38 +17,37 @@
 package io.github.dominikschlosser.keycloak.dsdjwt.status;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.dominikschlosser.keycloak.dsdjwt.chain.ChainException;
+import io.github.dominikschlosser.keycloak.dsdjwt.chain.ChainVerifier;
 import io.github.dominikschlosser.keycloak.dsdjwt.chain.IssuerKeyResolver;
-import io.github.dominikschlosser.keycloak.dsdjwt.chain.NumericDates;
-import java.io.ByteArrayOutputStream;
-import java.net.URI;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
-import java.time.Duration;
 import java.util.List;
-import java.util.OptionalLong;
-import java.util.zip.DataFormatException;
-import java.util.zip.Inflater;
+import java.util.zip.InflaterInputStream;
+import org.keycloak.common.VerificationException;
 import org.keycloak.common.util.Base64Url;
 import org.keycloak.crypto.SignatureVerifierContext;
 import org.keycloak.jose.jws.JWSInput;
-import org.keycloak.util.JsonSerialization;
+import org.keycloak.sdjwt.ClaimVerifier;
 
 /** Checks the Token Status List entry of a credential (draft-ietf-oauth-status-list-21). */
 public final class StatusListChecker {
 
     private static final int MAX_LIST_SIZE = 16 * 1024 * 1024;
 
+    // §5.1 requires iat, and §8.3 step 3.b checks that the required claims exist.
+    private static final ClaimVerifier TIMES =
+            ChainVerifier.times().withIatCheck(Integer.MAX_VALUE, false).build();
+
     private final StatusListFetcher fetcher;
     private final IssuerKeyResolver trust;
-    private final Clock clock;
-    private final Duration clockSkew;
 
-    public StatusListChecker(StatusListFetcher fetcher, IssuerKeyResolver trust, Clock clock, Duration clockSkew) {
+    public StatusListChecker(StatusListFetcher fetcher, IssuerKeyResolver trust) {
         this.fetcher = fetcher;
         this.trust = trust;
-        this.clock = clock;
-        this.clockSkew = clockSkew;
     }
 
     /**
@@ -76,7 +75,7 @@ public final class StatusListChecker {
             throw new ChainException("the status_list of the credential needs a uri and a whole number idx");
         }
         String location = uri.textValue();
-        if (!"https".equalsIgnoreCase(schemeOf(location))) {
+        if (!location.regionMatches(true, 0, "https://", 0, 8)) {
             throw new ChainException("the status list URI " + location + " does not use https");
         }
         int value = statusValue(
@@ -94,10 +93,10 @@ public final class StatusListChecker {
 
     private int statusValue(String token, String uri, int index, String credentialIssuer) throws ChainException {
         JWSInput jws;
-        JsonNode claims;
+        ObjectNode claims;
         try {
             jws = new JWSInput(token);
-            claims = JsonSerialization.mapper.readTree(jws.getContent());
+            claims = jws.readJsonContent(ObjectNode.class);
         } catch (Exception e) {
             throw new ChainException("the status list token at " + uri + " is not a JWT", e);
         }
@@ -118,15 +117,10 @@ public final class StatusListChecker {
         if (!claims.path("sub").isTextual() || !uri.equals(claims.get("sub").textValue())) {
             throw new ChainException("the status list token is for " + claims.get("sub") + ", not " + uri);
         }
-        // §5.1 requires iat, and §8.3 step 3.b checks that the required claims exist.
-        long iat = NumericDates.require(claims, "iat", "the status list token");
-        if (iat > clock.instant().getEpochSecond() + clockSkew.toSeconds()) {
-            throw new ChainException("the status list token has an iat in the future");
-        }
-        OptionalLong exp = NumericDates.read(claims, "exp", "the status list token");
-        if (exp.isPresent()
-                && exp.getAsLong() + clockSkew.toSeconds() <= clock.instant().getEpochSecond()) {
-            throw new ChainException("the status list token is expired");
+        try {
+            TIMES.verifyBodyClaims(claims);
+        } catch (VerificationException e) {
+            throw new ChainException("the status list token: " + e.getMessage(), e);
         }
         JsonNode list = claims.get("status_list");
         int bits = list == null ? 0 : list.path("bits").asInt();
@@ -158,34 +152,15 @@ public final class StatusListChecker {
 
     /** lst is a base64url encoded byte array with ZLIB compression. */
     private static byte[] inflate(String lst) throws ChainException {
-        Inflater inflater = new Inflater();
-        try {
-            inflater.setInput(Base64Url.decode(lst));
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            while (!inflater.finished()) {
-                int read = inflater.inflate(buffer);
-                if (read == 0 && (inflater.needsInput() || inflater.needsDictionary())) {
-                    throw new ChainException("the status list is truncated");
-                }
-                out.write(buffer, 0, read);
-                if (out.size() > MAX_LIST_SIZE) {
-                    throw new ChainException("the status list is larger than " + MAX_LIST_SIZE + " bytes");
-                }
-            }
-            return out.toByteArray();
-        } catch (DataFormatException | IllegalArgumentException e) {
+        byte[] statuses;
+        try (InputStream in = new InflaterInputStream(new ByteArrayInputStream(Base64Url.decode(lst)))) {
+            statuses = in.readNBytes(MAX_LIST_SIZE + 1);
+        } catch (IOException | IllegalArgumentException e) {
             throw new ChainException("the status list is not ZLIB data", e);
-        } finally {
-            inflater.end();
         }
-    }
-
-    private static String schemeOf(String uri) {
-        try {
-            return URI.create(uri).getScheme();
-        } catch (IllegalArgumentException e) {
-            return null;
+        if (statuses.length > MAX_LIST_SIZE) {
+            throw new ChainException("the status list is larger than " + MAX_LIST_SIZE + " bytes");
         }
+        return statuses;
     }
 }

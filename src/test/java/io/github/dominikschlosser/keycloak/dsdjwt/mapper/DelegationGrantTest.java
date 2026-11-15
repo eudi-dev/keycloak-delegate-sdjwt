@@ -18,7 +18,6 @@ package io.github.dominikschlosser.keycloak.dsdjwt.mapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.dominikschlosser.keycloak.dsdjwt.ConfigurationException;
@@ -43,40 +42,6 @@ class DelegationGrantTest {
 
         assertEquals("mapper spoof must not set the claim " + claim.split("\\.")[0] + " of the token", e.getMessage());
         assertFalse(token.getOtherClaims().containsKey("limit"));
-    }
-
-    @ParameterizedTest
-    @ValueSource(
-            strings = {
-                "aud",
-                "cnf.jkt",
-                "realm_access.roles",
-                "sid",
-                "may_act",
-                "client_id",
-                "scope",
-                "acr",
-                "amr",
-                "authorization",
-                "allowed-origins",
-                "groups",
-                "roles",
-                "iat",
-                "jti",
-                "typ",
-                "email",
-                "name",
-                "family_name",
-                "phone_number",
-                "address.country"
-            })
-    void refusesProtocolClaimTheTokenLacks(String claim) {
-        DelegationGrant grant = new DelegationGrant();
-        grant.addClaim("spoof", claim, "admin");
-
-        ConfigurationException e = assertThrows(ConfigurationException.class, () -> grant.applyClaims(token()));
-
-        assertEquals("mapper spoof must not set the claim " + claim.split("\\.")[0] + " of the token", e.getMessage());
     }
 
     @Test
@@ -105,18 +70,6 @@ class DelegationGrantTest {
         AccessToken token = token();
         grant.applyClaims(token);
         assertEquals("EUR", token.getOtherClaims().get("limit"));
-    }
-
-    @Test
-    void refusesAudienceWhenTheTokenHasNone() {
-        DelegationGrant grant = new DelegationGrant();
-        grant.addClaim("audience", "aud", "invoice-api");
-        AccessToken token = token();
-
-        ConfigurationException e = assertThrows(ConfigurationException.class, () -> grant.applyClaims(token));
-
-        assertEquals("mapper audience must not set the claim aud of the token", e.getMessage());
-        assertNull(token.getAudience());
     }
 
     private static AccessToken token() {

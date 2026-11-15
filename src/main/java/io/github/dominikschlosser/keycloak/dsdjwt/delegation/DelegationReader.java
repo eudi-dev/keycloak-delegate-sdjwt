@@ -42,7 +42,6 @@ public final class DelegationReader {
      * @param agentId where a Delegate Payload holds the agent identifier
      * @param audiences where a Delegate Payload lists the services it may be used at, or null
      * @param credentialTypes the accepted vct values of the credential
-     * @param delegateTypes the accepted vct values of a Delegate Payload, empty for any
      * @param realmIssuer the issuer of the realm that runs the exchange
      */
     public record Settings(
@@ -52,7 +51,6 @@ public final class DelegationReader {
             ClaimPath agentId,
             ClaimPath audiences,
             Set<String> credentialTypes,
-            Set<String> delegateTypes,
             String realmIssuer) {}
 
     public DelegationReader(Settings settings) {
@@ -61,7 +59,10 @@ public final class DelegationReader {
 
     public Delegation read(VerifiedChain chain) throws ChainException {
         ObjectNode credential = chain.credential();
-        checkType(credential, settings.credentialTypes(), "the credential");
+        JsonNode vct = credential.get("vct");
+        if (vct == null || !vct.isTextual() || !settings.credentialTypes().contains(vct.textValue())) {
+            throw new ChainException("the credential has vct " + vct + ", which is not accepted");
+        }
         String principal = settings.principal()
                 .find(credential)
                 .filter(JsonNode::isTextual)
@@ -78,7 +79,6 @@ public final class DelegationReader {
             VerifiedLink link = chain.links().get(i);
             ObjectNode payload = link.delegatePayload();
             String label = "the Delegate Payload of KB-SD-JWT " + (i + 1);
-            checkType(payload, settings.delegateTypes(), label);
             checkAudience(payload, label);
             Set<String> allowed = strings(payload, settings.actions(), label);
             // A link can only narrow what the credential and the links before it allow.
@@ -114,16 +114,6 @@ public final class DelegationReader {
         if (!strings(payload, settings.audiences(), label).contains(settings.realmIssuer())) {
             throw new ChainException(
                     label + " does not list " + settings.realmIssuer() + " in " + settings.audiences());
-        }
-    }
-
-    private static void checkType(ObjectNode claims, Set<String> accepted, String label) throws ChainException {
-        if (accepted.isEmpty()) {
-            return;
-        }
-        JsonNode vct = claims.get("vct");
-        if (vct == null || !vct.isTextual() || !accepted.contains(vct.textValue())) {
-            throw new ChainException(label + " has vct " + vct + ", which is not accepted");
         }
     }
 

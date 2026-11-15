@@ -16,17 +16,14 @@
 
 package io.github.dominikschlosser.keycloak.dsdjwt.idp;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.dominikschlosser.keycloak.dsdjwt.delegation.ClaimPath;
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
-import org.keycloak.broker.trust.DefaultTrustIdentityProviderConfig;
-import org.keycloak.broker.trust.DefaultTrustIdentityProviderFactory;
 import org.keycloak.jose.jwk.JSONWebKeySet;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.RealmModel;
@@ -45,7 +42,6 @@ public class DelegateSdJwtIdentityProviderConfig extends IdentityProviderModel {
     public static final String AGENT_ID_PATH = "agentIdPath";
     public static final String AUDIENCE_PATH = "audiencePath";
     public static final String CREDENTIAL_TYPES = "credentialTypes";
-    public static final String DELEGATE_TYPES = "delegateTypes";
 
     public static final String DEFAULT_ACTIONS_PATH = "mandate.actions";
     public static final String DEFAULT_AGENT_ID_PATH = "agent.id";
@@ -74,9 +70,6 @@ public class DelegateSdJwtIdentityProviderConfig extends IdentityProviderModel {
         if (!isBlank(getTrustMaterialIdps()) && !isBlank(getTrustedIssuerJwks())) {
             throw new IllegalArgumentException(
                     "set either " + TRUST_MATERIAL_IDPS + " or " + TRUSTED_ISSUER_JWKS + ", not both");
-        }
-        if (getTrustMaterialAliases().contains(getAlias())) {
-            throw new IllegalArgumentException(TRUST_MATERIAL_IDPS + " must not list this identity provider");
         }
         if (realm != null) {
             checkTrustMaterial(KeycloakSessionUtil.getKeycloakSession().identityProviders()::getByAlias);
@@ -119,26 +112,18 @@ public class DelegateSdJwtIdentityProviderConfig extends IdentityProviderModel {
     }
 
     /**
-     * Refuses a Delegate SD-JWT identity provider as trust material, because its trustedIssuerJwks
-     * would let it vouch for issuers that this identity provider does not trust. Also refuses a
-     * Default Trust identity provider without X.509. Its JWK Set has no issuer setting, so none of
-     * its keys could ever verify a credential.
+     * Refuses a Delegate SD-JWT identity provider as trust material, this one included. Keycloak's
+     * TrustMaterialResolver follows the aliases without a cycle check, and the trustedIssuerJwks of
+     * another one would vouch for issuers that this one does not trust.
      */
     void checkTrustMaterial(Function<String, IdentityProviderModel> identityProviders) {
         for (String alias : getTrustMaterialAliases()) {
             IdentityProviderModel model = identityProviders.apply(alias);
-            if (model == null) {
-                continue;
-            }
-            if (DelegateSdJwtIdentityProviderFactory.PROVIDER_ID.equals(model.getProviderId())) {
+            if (alias.equals(getAlias())
+                    || (model != null
+                            && DelegateSdJwtIdentityProviderFactory.PROVIDER_ID.equals(model.getProviderId()))) {
                 throw new IllegalArgumentException(
                         TRUST_MATERIAL_IDPS + " must not list the Delegate SD-JWT identity provider " + alias);
-            }
-            if (DefaultTrustIdentityProviderFactory.PROVIDER_ID.equals(model.getProviderId())
-                    && !Boolean.parseBoolean(model.getConfig().get(DefaultTrustIdentityProviderConfig.USE_X509))) {
-                throw new IllegalArgumentException(TRUST_MATERIAL_IDPS + " lists the Default Trust identity provider "
-                        + alias + " without X.509. Turn on X.509 there, or list the issuer keys in "
-                        + TRUSTED_ISSUER_JWKS);
             }
         }
     }
@@ -169,48 +154,21 @@ public class DelegateSdJwtIdentityProviderConfig extends IdentityProviderModel {
         return list(getConfig().get(CREDENTIAL_TYPES));
     }
 
-    public Set<String> getDelegateTypes() {
-        return list(getConfig().get(DELEGATE_TYPES));
-    }
-
     /**
      * Reads the trusted issuers. Each key is a credential iss and its value the JWK Set of that
      * issuer, so the key of one issuer never verifies a credential that names another.
      */
     static Map<String, JSONWebKeySet> parseIssuerJwks(String json) {
-        JsonNode issuers;
+        Map<String, JSONWebKeySet> issuers;
         try {
-            issuers = JsonSerialization.mapper.readTree(json);
+            issuers = JsonSerialization.mapper.readValue(json, new TypeReference<>() {});
         } catch (IOException e) {
-            throw new IllegalArgumentException(TRUSTED_ISSUER_JWKS + " is not JSON", e);
+            throw new IllegalArgumentException(TRUSTED_ISSUER_JWKS + " must map each issuer to a JWK Set", e);
         }
-        if (issuers == null || !issuers.isObject()) {
+        if (issuers == null || issuers.values().stream().anyMatch(jwks -> jwks == null || jwks.getKeys() == null)) {
             throw new IllegalArgumentException(TRUSTED_ISSUER_JWKS + " must map each issuer to a JWK Set");
         }
-        if (issuers.isEmpty()) {
-            throw new IllegalArgumentException(TRUSTED_ISSUER_JWKS + " lists no issuer");
-        }
-        Map<String, JSONWebKeySet> result = new LinkedHashMap<>();
-        for (Map.Entry<String, JsonNode> entry : issuers.properties()) {
-            JSONWebKeySet jwks;
-            try {
-                jwks = entry.getValue().isObject()
-                        ? JsonSerialization.mapper.treeToValue(entry.getValue(), JSONWebKeySet.class)
-                        : null;
-            } catch (IOException e) {
-                jwks = null;
-            }
-            if (jwks == null) {
-                throw new IllegalArgumentException(
-                        TRUSTED_ISSUER_JWKS + " has no JWK Set for the issuer " + entry.getKey());
-            }
-            if (jwks.getKeys() == null || jwks.getKeys().length == 0) {
-                throw new IllegalArgumentException(
-                        TRUSTED_ISSUER_JWKS + " has no keys for the issuer " + entry.getKey());
-            }
-            result.put(entry.getKey(), jwks);
-        }
-        return result;
+        return issuers;
     }
 
     private static ClaimPath path(String key, String value) {

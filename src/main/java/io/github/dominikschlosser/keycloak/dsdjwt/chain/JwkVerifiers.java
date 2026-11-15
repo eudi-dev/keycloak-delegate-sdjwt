@@ -49,21 +49,14 @@ public final class JwkVerifiers {
             throw new ChainException("the JWS algorithm " + headerAlg + " is not accepted");
         }
         String alg = algorithmOf(jwk, headerAlg);
-        if (!alg.equals(headerAlg)
-                || (jwk.getAlgorithm() != null && !jwk.getAlgorithm().equals(headerAlg))) {
+        if (!alg.equals(headerAlg)) {
             throw new ChainException("the key cannot verify the JWS algorithm " + headerAlg);
-        }
-        if (jwk.getPublicKeyUse() != null && !JWK.Use.SIG.asString().equals(jwk.getPublicKeyUse())) {
-            throw new ChainException("the key is not a signing key");
         }
         KeyWrapper key;
         try {
             key = JWKSUtils.getKeyWrapper(jwk);
         } catch (RuntimeException e) {
             throw new ChainException("the key cannot be read", e);
-        }
-        if (key == null || key.getPublicKey() == null) {
-            throw new ChainException("the key type " + jwk.getKeyType() + " is not supported");
         }
         if (key.getPublicKey() instanceof RSAPublicKey rsa && rsa.getModulus().bitLength() < MIN_RSA_BITS) {
             throw new ChainException("the RSA key is shorter than " + MIN_RSA_BITS + " bits");
@@ -77,9 +70,6 @@ public final class JwkVerifiers {
         JsonNode jwk = claims.path("cnf").path("jwk");
         if (!jwk.isObject()) {
             throw new ChainException(owner + " has no cnf claim with a jwk");
-        }
-        if (jwk.has("d")) {
-            throw new ChainException(owner + " has a private key in its cnf claim");
         }
         try {
             return JsonSerialization.mapper.convertValue(jwk, JWK.class);

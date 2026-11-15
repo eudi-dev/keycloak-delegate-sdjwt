@@ -19,20 +19,18 @@ package io.github.dominikschlosser.keycloak.dsdjwt.chain;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
-import java.time.Clock;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.OptionalLong;
 import java.util.Set;
 import org.keycloak.common.VerificationException;
 import org.keycloak.common.util.Base64Url;
 import org.keycloak.crypto.SignatureVerifierContext;
 import org.keycloak.jose.jwk.JWK;
+import org.keycloak.sdjwt.ClaimVerifier;
 import org.keycloak.sdjwt.IssuerSignedJWT;
 import org.keycloak.sdjwt.IssuerSignedJwtVerificationOpts;
 import org.keycloak.sdjwt.SdJwtUtils;
@@ -55,13 +53,13 @@ public final class ChainVerifier {
      * RFC 9901 §7.3 leaves the accepted age of the Key Binding JWT to the Verifier. The holder signs it for
      * one request with a single use nonce, so 5 minutes only has to cover the time until the exchange.
      */
-    static final Duration KEY_BINDING_MAX_AGE = Duration.ofMinutes(5);
+    static final int KEY_BINDING_MAX_AGE = 300;
 
     /**
-     * The tolerance for every time claim in the chain and the status list. A minute covers the drift
-     * between synchronized clocks and extends an expired credential by at most that minute.
+     * The tolerance in seconds for every time claim in the chain and the status list. A minute covers the
+     * drift between synchronized clocks and extends an expired credential by at most that minute.
      */
-    public static final Duration CLOCK_SKEW = Duration.ofSeconds(60);
+    public static final int CLOCK_SKEW = 60;
 
     static final String TYPE_KB_SD_JWT_KB = "kb-sd-jwt+kb";
     static final String TYPE_KB_JWT = "kb+jwt";
@@ -77,22 +75,33 @@ public final class ChainVerifier {
     /** The time claims of a Delegate Payload, which a nested Disclosure must not add. */
     private static final List<String> DELEGATE_SIGNED_CLAIMS = List.of("nbf", "iat", "exp");
 
-    // checkValidity checks the time claims against the injected clock, so the library checks none.
-    private static final IssuerSignedJwtVerificationOpts NO_CLAIM_CHECKS =
-            new IssuerSignedJwtVerificationOpts(List.of(), List.of());
+    private static final IssuerSignedJwtVerificationOpts SIGNED_TIMES = times().build();
+
+    private static final ClaimVerifier DELEGATE_TIMES =
+            times().withExpCheck(false).build();
+
+    private static final ClaimVerifier KEY_BINDING_TIMES =
+            times().withIatCheck(KEY_BINDING_MAX_AGE, false).build();
 
     private final IssuerKeyResolver issuerKeys;
-    private final Clock clock;
 
-    public ChainVerifier(IssuerKeyResolver issuerKeys, Clock clock) {
+    public ChainVerifier(IssuerKeyResolver issuerKeys) {
         this.issuerKeys = Objects.requireNonNull(issuerKeys);
-        this.clock = Objects.requireNonNull(clock);
+    }
+
+    /**
+     * Checks exp and nbf when present and refuses an iat in the future, all against Keycloak time.
+     * The iat has no maximum age, so the largest one the library takes stands for none.
+     */
+    public static IssuerSignedJwtVerificationOpts.Builder times() {
+        return new IssuerSignedJwtVerificationOpts.Builder(CLOCK_SKEW)
+                .withIatCheck(Integer.MAX_VALUE, true)
+                .withExpCheck(true)
+                .withNbfCheck(true);
     }
 
     /** @param audience the required aud of the Key Binding JWT */
     public VerifiedChain verify(String raw, String audience) throws ChainException {
-        long now = clock.instant().getEpochSecond();
-        long skew = CLOCK_SKEW.toSeconds();
         Parsed parsed = parse(raw);
 
         Segment credentialSegment = parsed.segments().get(0);
@@ -107,15 +116,13 @@ public final class ChainVerifier {
             throw new ChainException("the SD-JWT has no iss string");
         }
         List<SignatureVerifierContext> trusted = issuerKeys.resolve(credentialJwt.getJwsHeader(), issuer.textValue());
-        if (trusted == null || trusted.isEmpty()) {
+        if (trusted.isEmpty()) {
             throw new ChainException("no trusted key of the credential issuer was found");
         }
-        SignatureVerifierContext issuerKey =
-                verifySignature(credentialJwt, trusted, "the SD-JWT", "a trusted issuer key");
         // §6 step 2: the initial SD-JWT is verified as RFC 9901 §7.1 describes.
-        ObjectNode credential = disclose(credentialJwt, credentialSegment, issuerKey, "the SD-JWT");
+        ObjectNode credential = disclose(credentialJwt, credentialSegment, trusted, "the SD-JWT");
         checkSignedClaims(credentialJwt, credential, CREDENTIAL_SIGNED_CLAIMS, "the SD-JWT");
-        long expiresAt = checkValidity(credential, "the SD-JWT", false, now, skew);
+        long expiresAt = expiry(credential);
 
         List<VerifiedLink> links = new ArrayList<>();
         Set<List<String>> firstWithheld = new HashSet<>();
@@ -136,21 +143,21 @@ public final class ChainVerifier {
             // §6 step 3.1: "The cnf claim of the preceding component is used as the Issuer public key."
             JWK signerKey = JwkVerifiers.confirmationKey(precedingClaims, precedingLabel);
             SignatureVerifierContext verifier = verifierFor(signerKey, linkJwt, label);
-            verifySignature(linkJwt, List.of(verifier), label, "the cnf key of " + precedingLabel);
-            ObjectNode disclosed = disclose(linkJwt, segment, verifier, label);
+            ObjectNode disclosed = disclose(linkJwt, segment, List.of(verifier), label);
             checkSignedClaims(linkJwt, disclosed, LINK_SIGNED_CLAIMS, label);
 
             ObjectNode payload = linkJwt.getPayload();
             // §5.1.4: "KB-SD-JWTs MUST conform to all the requirements of a KB-JWT".
             checkKeyBindingClaims(payload, label);
-            expiresAt = Math.min(expiresAt, checkValidity(disclosed, label, false, now, skew));
+            expiresAt = Math.min(expiresAt, expiry(disclosed));
             checkPrecedingHash(payload, preceding, precedingJwt, label);
             ObjectNode delegatePayload = delegatePayload(payload, disclosed, label);
             String delegateLabel = "the Delegate Payload of " + label;
             Map<String, JsonNode> disclosures = disclosuresByDigest(linkJwt, segment, delegateLabel);
             JsonNode signedPayload = signedDelegatePayload(linkJwt, disclosures, delegateLabel);
             checkDelegateSignedClaims(signedPayload, delegatePayload, delegateLabel);
-            expiresAt = Math.min(expiresAt, checkValidity(delegatePayload, delegateLabel, true, now, skew));
+            checkTimes(DELEGATE_TIMES, delegatePayload, delegateLabel);
+            expiresAt = Math.min(expiresAt, expiry(delegatePayload));
             // §5.1.4: "If the typ is KB-SD-JWT+KB then the Delegate Payload MUST include a cnf claim."
             JWK delegateKey = JwkVerifiers.confirmationKey(delegatePayload, delegateLabel);
             if (i == 1) {
@@ -165,7 +172,7 @@ public final class ChainVerifier {
         }
 
         KeyBinding keyBinding =
-                checkKeyBindingJwt(parsed.keyBindingJwt(), preceding, precedingJwt, precedingClaims, audience, now);
+                checkKeyBindingJwt(parsed.keyBindingJwt(), preceding, precedingJwt, precedingClaims, audience);
         expiresAt = Math.min(expiresAt, keyBinding.expiresAt());
         return new VerifiedChain(credentialJwt, credential, links, firstWithheld, keyBinding.nonce(), expiresAt);
     }
@@ -181,9 +188,6 @@ public final class ChainVerifier {
      * segment keeps its trailing tilde because sd_hash covers it (RFC 9901 §4.3.1).
      */
     static Parsed parse(String raw) throws ChainException {
-        if (raw == null || raw.isBlank()) {
-            throw new ChainException("subject_token is empty");
-        }
         if (raw.length() > MAX_TOKEN_LENGTH) {
             throw new ChainException("subject_token is longer than " + MAX_TOKEN_LENGTH + " characters");
         }
@@ -252,44 +256,22 @@ public final class ChainVerifier {
         }
     }
 
-    private static SignatureVerifierContext verifySignature(
-            IssuerSignedJWT jwt, List<SignatureVerifierContext> verifiers, String label, String signer)
-            throws ChainException {
-        for (SignatureVerifierContext verifier : verifiers) {
-            try {
-                jwt.verifySignature(verifier);
-                return verifier;
-            } catch (VerificationException | RuntimeException e) {
-                // The next candidate key may match.
-            }
-        }
-        throw new ChainException("the signature of " + label + " does not verify with " + signer);
-    }
-
-    /** Checks the Disclosures with RFC 9901 §7.1 steps 3 to 5 and returns the processed payload. */
+    /**
+     * Checks the signature, the Disclosures with RFC 9901 §7.1 steps 2 to 5, and exp and nbf of the
+     * signed payload, and returns the processed payload.
+     */
     private static ObjectNode disclose(
-            IssuerSignedJWT jwt, Segment segment, SignatureVerifierContext verifier, String label)
+            IssuerSignedJWT jwt, Segment segment, List<SignatureVerifierContext> verifiers, String label)
             throws ChainException {
         try {
-            jwt.verifySdHashAlgorithm();
-        } catch (VerificationException e) {
-            throw new ChainException(label + " has the _sd_alg " + jwt.getSdHashAlg() + ", which is not accepted", e);
-        }
-        JsonNode disclosed;
-        try {
-            // The library hashes every Disclosure with _sd_alg while it builds this context.
-            disclosed = new SdJwtVerificationContext(jwt, segment.disclosures())
-                    .verifyIssuance(List.of(verifier), NO_CLAIM_CHECKS, null);
+            return (ObjectNode) new SdJwtVerificationContext(jwt, segment.disclosures())
+                    .verifyIssuance(verifiers, SIGNED_TIMES, null);
         } catch (VerificationException e) {
             throw new ChainException(label + ": " + e.getMessage(), e);
         } catch (RuntimeException e) {
             // The library maps Disclosures by digest and fails on a duplicate or malformed one.
             throw new ChainException(label + " has a malformed or repeated Disclosure", e);
         }
-        if (!(disclosed instanceof ObjectNode object)) {
-            throw new ChainException(label + " has no JSON object payload");
-        }
-        return object;
     }
 
     private static void checkSignedClaims(IssuerSignedJWT jwt, JsonNode disclosed, List<String> names, String label)
@@ -302,25 +284,16 @@ public final class ChainVerifier {
         }
     }
 
-    /** Checks exp and nbf with the clock skew and returns exp, or Long.MAX_VALUE without one. */
-    private static long checkValidity(JsonNode claims, String owner, boolean expRequired, long now, long skew)
-            throws ChainException {
-        OptionalLong exp = NumericDates.read(claims, "exp", owner);
-        if (exp.isEmpty() && expRequired) {
-            throw new ChainException(owner + " has no exp claim");
+    private static void checkTimes(ClaimVerifier times, ObjectNode claims, String owner) throws ChainException {
+        try {
+            times.verifyBodyClaims(claims);
+        } catch (VerificationException e) {
+            throw new ChainException(owner + ": " + e.getMessage(), e);
         }
-        if (exp.isPresent() && now >= exp.getAsLong() + skew) {
-            throw new ChainException(owner + " expired at " + exp.getAsLong());
-        }
-        OptionalLong nbf = NumericDates.read(claims, "nbf", owner);
-        if (nbf.isPresent() && now + skew < nbf.getAsLong()) {
-            throw new ChainException(owner + " is not valid before " + nbf.getAsLong());
-        }
-        OptionalLong iat = NumericDates.read(claims, "iat", owner);
-        if (iat.isPresent() && now + skew < iat.getAsLong()) {
-            throw new ChainException(owner + " has an iat in the future");
-        }
-        return exp.orElse(Long.MAX_VALUE);
+    }
+
+    private static long expiry(JsonNode claims) {
+        return claims.path("exp").asLong(Long.MAX_VALUE);
     }
 
     /**
@@ -330,7 +303,9 @@ public final class ChainVerifier {
      * hold any value.
      */
     private static void checkKeyBindingClaims(JsonNode payload, String label) throws ChainException {
-        NumericDates.require(payload, "iat", label);
+        if (!payload.path("iat").isNumber()) {
+            throw new ChainException(label + " has no iat number");
+        }
         for (String name : List.of("aud", "nonce")) {
             JsonNode value = payload.get(name);
             if (value == null || !value.isTextual() || value.textValue().isEmpty()) {
@@ -492,12 +467,7 @@ public final class ChainVerifier {
 
     /** §6 steps 5.2 and 5.3. */
     private static KeyBinding checkKeyBindingJwt(
-            String jws,
-            Segment last,
-            IssuerSignedJWT lastJwt,
-            ObjectNode lastDelegatePayload,
-            String audience,
-            long now)
+            String jws, Segment last, IssuerSignedJWT lastJwt, ObjectNode lastDelegatePayload, String audience)
             throws ChainException {
         String label = "the Key Binding JWT";
         IssuerSignedJWT keyBinding = parseJwt(jws, label);
@@ -507,8 +477,11 @@ public final class ChainVerifier {
         }
         String lastLabel = "the Delegate Payload of the last KB-SD-JWT";
         JWK holderKey = JwkVerifiers.confirmationKey(lastDelegatePayload, lastLabel);
-        SignatureVerifierContext verifier = verifierFor(holderKey, keyBinding, label);
-        verifySignature(keyBinding, List.of(verifier), label, "the cnf key of " + lastLabel);
+        try {
+            keyBinding.verifySignature(verifierFor(holderKey, keyBinding, label));
+        } catch (VerificationException e) {
+            throw new ChainException("the signature of " + label + " does not verify with the cnf key of " + lastLabel);
+        }
 
         ObjectNode payload = keyBinding.getPayload();
         checkKeyBindingClaims(payload, label);
@@ -520,18 +493,12 @@ public final class ChainVerifier {
             throw new ChainException("the sd_hash of " + label + " does not match the last KB-SD-JWT");
         }
 
-        long skew = CLOCK_SKEW.toSeconds();
-        // RFC 9901 §7.3 step 5.e and 5.f bind the Key Binding JWT to this request. checkValidity refuses an
-        // iat in the future.
-        long iat = NumericDates.require(payload, "iat", label);
-        if (now >= iat + KEY_BINDING_MAX_AGE.toSeconds() + skew) {
-            throw new ChainException(label + " is older than " + KEY_BINDING_MAX_AGE.toSeconds() + " seconds");
-        }
+        // RFC 9901 §7.3 step 5.e and 5.f bind the Key Binding JWT to this request.
+        checkTimes(KEY_BINDING_TIMES, payload, label);
         String aud = payload.get("aud").textValue();
         if (!audience.equals(aud)) {
             throw new ChainException(label + " has aud " + aud + ", expected " + audience);
         }
-        long expiresAt = checkValidity(payload, label, false, now, skew);
-        return new KeyBinding(payload.get("nonce").textValue(), expiresAt);
+        return new KeyBinding(payload.get("nonce").textValue(), expiry(payload));
     }
 }

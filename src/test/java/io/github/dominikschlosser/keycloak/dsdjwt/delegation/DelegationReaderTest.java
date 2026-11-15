@@ -27,18 +27,22 @@ import io.github.dominikschlosser.keycloak.dsdjwt.ChainBuilder;
 import io.github.dominikschlosser.keycloak.dsdjwt.chain.ChainException;
 import io.github.dominikschlosser.keycloak.dsdjwt.chain.ChainVerifier;
 import io.github.dominikschlosser.keycloak.dsdjwt.chain.JwkVerifiers;
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.keycloak.common.crypto.CryptoIntegration;
+import org.keycloak.common.util.Time;
 
 class DelegationReaderTest {
+
+    @AfterEach
+    void resetTime() {
+        Time.setOffset(0);
+    }
 
     private static final ClaimPath AUDIENCES = ClaimPath.parse("mandate.audiences");
     private static final Set<String> CREDENTIAL_TYPES = Set.of("urn:eudi-test:business:poa:1");
@@ -53,7 +57,7 @@ class DelegationReaderTest {
         ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay", "order:create");
         builder.links(1, "invoice:pay", "report:read");
 
-        Delegation delegation = read(builder, settings(AUDIENCES, CREDENTIAL_TYPES, Set.of()));
+        Delegation delegation = read(builder, settings(AUDIENCES, CREDENTIAL_TYPES));
 
         assertEquals("https://register.example", delegation.issuer());
         assertEquals(PRINCIPAL, delegation.principal());
@@ -148,8 +152,8 @@ class DelegationReaderTest {
                 .putArray("audiences")
                 .add("https://erp.bolt.example");
 
-        ChainException e = assertThrows(
-                ChainException.class, () -> read(builder, settings(AUDIENCES, CREDENTIAL_TYPES, Set.of())));
+        ChainException e =
+                assertThrows(ChainException.class, () -> read(builder, settings(AUDIENCES, CREDENTIAL_TYPES)));
 
         assertEquals(
                 "the Delegate Payload of KB-SD-JWT 2 does not list " + AUDIENCE + " in mandate.audiences",
@@ -169,25 +173,9 @@ class DelegationReaderTest {
         ChainBuilder builder = new ChainBuilder().links(1, "invoice:pay");
 
         ChainException e = assertThrows(
-                ChainException.class,
-                () -> read(builder, settings(null, Set.of("urn:eudi-test:business:lpid:1"), Set.of())));
+                ChainException.class, () -> read(builder, settings(null, Set.of("urn:eudi-test:business:lpid:1"))));
 
         assertEquals("the credential has vct \"urn:eudi-test:business:poa:1\", which is not accepted", e.getMessage());
-    }
-
-    @Test
-    void refusesUnacceptedDelegatePayloadType() {
-        ChainBuilder builder = new ChainBuilder().links(2, "invoice:pay");
-        builder.link(2).delegatePayload.put("vct", "urn:eudi-test:business:other:1");
-
-        ChainException e = assertThrows(
-                ChainException.class,
-                () -> read(
-                        builder, settings(null, CREDENTIAL_TYPES, Set.of("urn:eudi-test:business:agent-mandate:1"))));
-
-        assertEquals(
-                "the Delegate Payload of KB-SD-JWT 2 has vct \"urn:eudi-test:business:other:1\", which is not accepted",
-                e.getMessage());
     }
 
     @Test
@@ -239,11 +227,10 @@ class DelegationReaderTest {
     }
 
     private static DelegationReader.Settings defaults() {
-        return settings(null, CREDENTIAL_TYPES, Set.of());
+        return settings(null, CREDENTIAL_TYPES);
     }
 
-    private static DelegationReader.Settings settings(
-            ClaimPath audiences, Set<String> credentialTypes, Set<String> delegateTypes) {
+    private static DelegationReader.Settings settings(ClaimPath audiences, Set<String> credentialTypes) {
         return new DelegationReader.Settings(
                 ClaimPath.parse("euid_reference"),
                 ClaimPath.parse("authorisation.actions"),
@@ -251,14 +238,13 @@ class DelegationReaderTest {
                 ClaimPath.parse("agent.id"),
                 audiences,
                 credentialTypes,
-                delegateTypes,
                 AUDIENCE);
     }
 
     private static Delegation read(ChainBuilder builder, DelegationReader.Settings settings) throws ChainException {
+        Time.setOffset((int) (builder.now - System.currentTimeMillis() / 1000));
         ChainVerifier verifier = new ChainVerifier(
-                (header, iss) -> List.of(JwkVerifiers.forKey(builder.issuerJwk(), header.getRawAlgorithm())),
-                Clock.fixed(Instant.ofEpochSecond(builder.now), ZoneOffset.UTC));
+                (header, iss) -> List.of(JwkVerifiers.forKey(builder.issuerJwk(), header.getRawAlgorithm())));
         return new DelegationReader(settings).read(verifier.verify(builder.build(), AUDIENCE));
     }
 }

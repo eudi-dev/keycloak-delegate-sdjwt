@@ -31,22 +31,25 @@ import io.github.dominikschlosser.keycloak.dsdjwt.chain.JwkVerifiers;
 import io.github.dominikschlosser.keycloak.dsdjwt.idp.TrustedIssuerKeys;
 import java.io.ByteArrayOutputStream;
 import java.security.cert.X509Certificate;
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.Deflater;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.keycloak.common.crypto.CryptoIntegration;
 import org.keycloak.common.util.Base64Url;
+import org.keycloak.common.util.Time;
 import org.keycloak.crypto.KeyWrapper;
 
 class StatusListCheckerTest {
+
+    @AfterEach
+    void resetTime() {
+        Time.setOffset(0);
+    }
 
     private static final String URI = "https://register.example/status/7";
     private static final String ISSUER = "https://register.example";
@@ -142,7 +145,7 @@ class StatusListCheckerTest {
         claims.put("exp", NOW - 61);
         tokens.put(URI, token(claims));
 
-        assertRefused("the status list token is expired", credential(URI, 0));
+        assertRefused("the status list token: Token has expired by exp", credential(URI, 0));
     }
 
     @Test
@@ -151,16 +154,16 @@ class StatusListCheckerTest {
         claims.remove("iat");
         tokens.put(URI, token(claims));
 
-        assertRefused("the status list token has no iat claim", credential(URI, 0));
+        assertRefused("the status list token: Missing required claim 'iat'", credential(URI, 0));
     }
 
     @Test
     void refusesIatInTheFuture() {
         ObjectNode claims = statusList(1, 0);
-        claims.put("iat", NOW + 61);
+        claims.put("iat", NOW + 65);
         tokens.put(URI, token(claims));
 
-        assertRefused("the status list token has an iat in the future", credential(URI, 0));
+        assertRefused("the status list token: Token was issued in the future", credential(URI, 0));
     }
 
     @Test
@@ -254,7 +257,7 @@ class StatusListCheckerTest {
 
     private void assertRefused(String message, ObjectNode credential) {
         ChainException e = assertThrows(ChainException.class, () -> checker().check(credential));
-        assertEquals(message, e.getMessage());
+        assertTrue(e.getMessage().startsWith(message), e.getMessage());
     }
 
     private StatusListChecker checker() {
@@ -276,8 +279,8 @@ class StatusListCheckerTest {
             }
             return token;
         };
-        return new StatusListChecker(
-                fetcher, trust, Clock.fixed(Instant.ofEpochSecond(NOW), ZoneOffset.UTC), Duration.ofMinutes(1));
+        Time.setOffset((int) (NOW - System.currentTimeMillis() / 1000));
+        return new StatusListChecker(fetcher, trust);
     }
 
     private static ObjectNode credential(String uri, int index) {

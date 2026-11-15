@@ -96,12 +96,6 @@ public class DelegateSdJwtIdentityProviderFactory
             .type(ProviderConfigProperty.STRING_TYPE)
             .required(true)
             .add()
-            .property()
-            .name(DELEGATE_TYPES)
-            .label("Delegate Payload Types")
-            .helpText("Comma separated vct values a Delegate Payload may have. Empty accepts any.")
-            .type(ProviderConfigProperty.STRING_TYPE)
-            .add()
             .build();
 
     @Override

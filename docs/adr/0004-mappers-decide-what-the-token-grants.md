@@ -16,7 +16,7 @@ A Disclosure can also sit inside the value, for example for the `amount` of `man
 
 ## Consequences
 
-A mapper must not set a claim that the token already holds, such as `sub`, `act`, `aud` or `azp`. The check runs on the finished token. A mapper must not add a claim with a protocol meaning either, even when the token lacks it. These are the registered JWT, OAuth and OpenID Connect claims such as `aud`, `client_id`, `scope`, `cnf` and `sid`, the OpenID Connect Core §5.1 claims such as `email` and `name` that describe the principal, and the Keycloak claims such as `realm_access` and `allowed-origins`. 2 mappers must not set the same claim. Such a setup gives a `server_error`.
+A mapper must not set a claim that the token already holds, such as `sub`, `act` or `azp`. The check runs on the finished token. 2 mappers must not set the same claim. Such a setup gives a `server_error`.
 
 A mapper may grant an admin role only when the identity provider allows admin role mapping. Otherwise the exchange gives a `server_error`.
 

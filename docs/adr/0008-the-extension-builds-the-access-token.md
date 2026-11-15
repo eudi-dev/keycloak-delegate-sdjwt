@@ -20,7 +20,7 @@ The token holds these claims.
 
 The claim mappers add their claims last (ADR 0004).
 
-With the `audience` parameter, each requested client must be one the token holds a role of. Then `aud` and `resource_access` hold only the requested clients. An unknown client gives `invalid_client` and a client without a granted role gives `invalid_request`.
+With the `audience` parameter, each requested client must be one the token holds a role of. Then `aud` and `resource_access` hold only the requested clients. Any other requested audience gives `invalid_request`.
 
 The response holds `access_token`, `issued_token_type` with the value `urn:ietf:params:oauth:token-type:access_token`, `token_type` with `Bearer` and `expires_in`.
 

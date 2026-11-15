@@ -24,7 +24,7 @@ import io.github.dominikschlosser.keycloak.dsdjwt.delegation.Delegation;
 import io.github.dominikschlosser.keycloak.dsdjwt.delegation.DelegationReader;
 import io.github.dominikschlosser.keycloak.dsdjwt.idp.DelegateSdJwtIdentityProvider;
 import io.github.dominikschlosser.keycloak.dsdjwt.idp.DelegateSdJwtIdentityProviderConfig;
-import io.github.dominikschlosser.keycloak.dsdjwt.idp.DelegateSdJwtIdentityProviders;
+import io.github.dominikschlosser.keycloak.dsdjwt.idp.DelegateSdJwtIdentityProviderFactory;
 import io.github.dominikschlosser.keycloak.dsdjwt.idp.TrustedIssuerKeys;
 import io.github.dominikschlosser.keycloak.dsdjwt.mapper.DelegationGrant;
 import io.github.dominikschlosser.keycloak.dsdjwt.mapper.DelegationMapper;
@@ -49,6 +49,7 @@ import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.IdentityProviderMapperModel;
+import org.keycloak.models.IdentityProviderQuery;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.RoleModel;
@@ -188,18 +189,27 @@ public class DelegateTokenExchangeProvider implements TokenExchangeProvider {
     }
 
     private DelegateSdJwtIdentityProviderConfig identityProvider() {
-        try {
-            return DelegateSdJwtIdentityProviders.forClient(session, client)
-                    .orElseThrow(() -> refuse(
-                            OAuthErrorException.UNAUTHORIZED_CLIENT,
-                            Errors.UNAUTHORIZED_CLIENT,
-                            "no Delegate SD-JWT identity provider lists the client"));
-        } catch (ConfigurationException e) {
-            event.detail(Details.REASON, e.getMessage());
-            event.error(Errors.INVALID_CONFIG);
-            throw new CorsErrorResponseException(
-                    cors, OAuthErrorException.SERVER_ERROR, e.getMessage(), Response.Status.INTERNAL_SERVER_ERROR);
+        List<DelegateSdJwtIdentityProviderConfig> matches = session.identityProviders()
+                .getAllStream(IdentityProviderQuery.any())
+                .filter(model -> DelegateSdJwtIdentityProviderFactory.PROVIDER_ID.equals(model.getProviderId()))
+                .filter(model -> model.isEnabled())
+                .map(DelegateSdJwtIdentityProviderConfig::new)
+                .filter(config -> config.getClients().contains(client.getClientId()))
+                .toList();
+        if (matches.isEmpty()) {
+            throw refuse(
+                    OAuthErrorException.UNAUTHORIZED_CLIENT,
+                    Errors.UNAUTHORIZED_CLIENT,
+                    "no Delegate SD-JWT identity provider lists the client");
         }
+        if (matches.size() > 1) {
+            throw misconfigured(new ConfigurationException("the identity providers "
+                    + matches.stream()
+                            .map(DelegateSdJwtIdentityProviderConfig::getAlias)
+                            .toList()
+                    + " all list the client " + client.getClientId()));
+        }
+        return matches.get(0);
     }
 
     private CorsErrorResponseException misconfigured(RuntimeException e) {
@@ -214,8 +224,7 @@ public class DelegateTokenExchangeProvider implements TokenExchangeProvider {
 
     private Delegation verify(DelegateSdJwtIdentityProviderConfig config, String realmIssuer) throws ChainException {
         TrustedIssuerKeys trust = new TrustedIssuerKeys(new DelegateSdJwtIdentityProvider(session, config));
-        VerifiedChain chain =
-                new ChainVerifier(trust, KeycloakClock.INSTANCE).verify(params.getSubjectToken(), realmIssuer);
+        VerifiedChain chain = new ChainVerifier(trust).verify(params.getSubjectToken(), realmIssuer);
         Delegation delegation = new DelegationReader(new DelegationReader.Settings(
                         config.getPrincipalClaim(),
                         config.getCredentialActionsPath(),
@@ -223,7 +232,6 @@ public class DelegateTokenExchangeProvider implements TokenExchangeProvider {
                         config.getAgentIdPath(),
                         config.getAudiencePath(),
                         config.getCredentialTypes(),
-                        config.getDelegateTypes(),
                         realmIssuer))
                 .read(chain);
         NonceStore.consume(session, realm, client, chain.nonce());
@@ -232,9 +240,7 @@ public class DelegateTokenExchangeProvider implements TokenExchangeProvider {
                                 session.getProvider(HttpClientProvider.class).getHttpClient(),
                                 HttpStatusListFetcher.DEFAULT_TIMEOUT,
                                 HttpStatusListFetcher.DEFAULT_DEADLINE),
-                        trust,
-                        KeycloakClock.INSTANCE,
-                        ChainVerifier.CLOCK_SKEW)
+                        trust)
                 .check(chain.credential());
         return delegation;
     }
@@ -319,13 +325,6 @@ public class DelegateTokenExchangeProvider implements TokenExchangeProvider {
         List<String> requested = params.getAudience();
         if (requested != null && !requested.isEmpty()) {
             for (String audience : requested) {
-                if (realm.getClientByClientId(audience) == null) {
-                    event.detail(Details.AUDIENCE, audience);
-                    throw refuse(
-                            OAuthErrorException.INVALID_CLIENT,
-                            Errors.CLIENT_NOT_FOUND,
-                            "the audience " + audience + " is not a client of the realm");
-                }
                 if (!available.contains(audience)) {
                     throw refuse(
                             OAuthErrorException.INVALID_REQUEST,

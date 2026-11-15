@@ -77,7 +77,6 @@ Add an identity provider of type **Delegate SD-JWT**. It holds the settings for 
 | `actionsPath` | `mandate.actions` | Path of the action list in a Delegate Payload |
 | `agentIdPath` | `agent.id` | Path of the agent identifier in a Delegate Payload |
 | `audiencePath` | | Path of a list in each Delegate Payload that must contain the realm issuer |
-| `delegateTypes` | | Accepted `vct` values of a Delegate Payload, comma separated |
 
 A path is a dot separated list of object keys.
 

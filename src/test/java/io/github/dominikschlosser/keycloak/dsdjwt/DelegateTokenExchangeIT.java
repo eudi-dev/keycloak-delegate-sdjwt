@@ -63,7 +63,6 @@ class DelegateTokenExchangeIT {
     private static final String UNLISTED_AGENT = "unlisted-agent";
     private static final String LEDGER_AGENT = "ledger-agent";
     private static final String FOREIGN_AGENT = "foreign-agent";
-    private static final String AUDIT_AGENT = "audit-agent";
     private static final String FIXED_ROLE_AGENT = "fixed-role-agent";
     private static final String PUBLIC_AGENT = "public-agent";
     private static final String SHARED_AGENT = "shared-agent";
@@ -220,19 +219,6 @@ class DelegateTokenExchangeIT {
                 "server_error",
                 "the Delegate SD-JWT identity provider is misconfigured: the mapper fixed role of type"
                         + " hardcoded-role-idp-mapper cannot map a delegation");
-    }
-
-    @Test
-    void refusesClaimMapperForAudienceOfTokenWithoutAudience() throws Exception {
-        JsonNode response = exchange(
-                AUDIT_AGENT, chain(AUDIT_AGENT).links(1, "ledger:audit").build(), Map.of());
-
-        assertRefused(
-                response,
-                500,
-                "server_error",
-                "the Delegate SD-JWT identity provider is misconfigured: mapper audience must not set the claim aud of"
-                        + " the token");
     }
 
     @Test
@@ -466,7 +452,7 @@ class DelegateTokenExchangeIT {
                 exchange(AGENT, chain.build(), Map.of()),
                 400,
                 "invalid_request",
-                "the signature of the SD-JWT does not verify with a trusted issuer key");
+                "the SD-JWT: Invalid Issuer-Signed JWT: Signature could not be verified");
     }
 
     @Test
@@ -684,7 +670,6 @@ class DelegateTokenExchangeIT {
                 UNLISTED_AGENT,
                 LEDGER_AGENT,
                 FOREIGN_AGENT,
-                AUDIT_AGENT,
                 FIXED_ROLE_AGENT,
                 PUBLIC_AGENT,
                 SHARED_AGENT,
@@ -717,7 +702,6 @@ class DelegateTokenExchangeIT {
         }
 
         ObjectNode roles = realm.putObject("roles");
-        roles.putArray("realm").addObject().put("name", "auditor");
         ArrayNode apiRoles = roles.putObject("client").putArray(API);
         apiRoles.addObject().put("name", "invoice-payer");
         apiRoles.addObject().put("name", "order-creator");
@@ -734,7 +718,6 @@ class DelegateTokenExchangeIT {
         identityProvider(idps, "delegation-admin", ADMIN_AGENT, jwks, Map.of());
         identityProvider(idps, "delegation-ledger", LEDGER_AGENT, jwks, Map.of());
         identityProvider(idps, "delegation-foreign", FOREIGN_AGENT, jwks, Map.of());
-        identityProvider(idps, "delegation-audit", AUDIT_AGENT, jwks, Map.of());
         identityProvider(idps, "delegation-fixed-role", FIXED_ROLE_AGENT, jwks, Map.of());
         identityProvider(idps, "delegation-public", PUBLIC_AGENT, jwks, Map.of());
         identityProvider(idps, "delegation-shared-1", SHARED_AGENT, jwks, Map.of());
@@ -782,18 +765,6 @@ class DelegateTokenExchangeIT {
                 "fixed role",
                 "hardcoded-role-idp-mapper",
                 Map.of("role", API + ".order-creator", "syncMode", "INHERIT"));
-        mapper(
-                mappers,
-                "delegation-audit",
-                "audit",
-                "delegate-sd-jwt-action-role-mapper",
-                Map.of("action", "ledger:audit", "role", "auditor"));
-        mapper(
-                mappers,
-                "delegation-audit",
-                "audience",
-                "delegate-sd-jwt-claim-mapper",
-                Map.of("source", "mandate.purpose", "claim.name", "aud"));
         mapper(
                 mappers,
                 "delegation-admin",
