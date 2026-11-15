@@ -1,0 +1,121 @@
+{
+  "description": "dSD-JWT+KB in the format of docs/chain-format.md. The agent shows a mandate to the supplier portal.",
+  "token": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImRjK3NkLWp3dCJ9.eyJfc2QiOlsiNDhJYjd1SDJNVHVlZDBNZVpWOExLRU9RTDZDVU1KM0NjVkNDd2ZERk1FRSIsIk1wbExhSENoZWtRNFlzLW93emRpV3VfR09jTHZPME5MUlk1MVRRSnJLZ0kiLCJmNjhCVHR6SzVyTkxRTWhrMERCMlMwX3ZESFlHZld4Smg2RHJMUlFYdXcwIiwiZ0pDbEluSHFsTUFRSWhjQ3ktTThOQVIxbTlyVUVPUlE4bnVlb2FvV2hrYyJdLCJfc2RfYWxnIjoic2hhLTI1NiIsImNuZiI6eyJqd2siOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiJ2dFFvclBWSmgzaWp1U2ZTUlkxNXZiVVhWMkR6SHE0YkNtVElSS2tzX18wIiwieSI6Im1FSF9ZTzFZTnFabW52VGt5a1d1SUM5bGpsOG0yTV9PMzhiWTJYS1pNaGcifX0sImV4cCI6MTgyNjEwNzIwMCwiaWF0IjoxNzk0NDg0ODAwLCJpc3MiOiJodHRwczovL3dhbGxldC5leGFtcGxlIiwibmJmIjoxNzk0NDg0ODAwLCJ2Y3QiOiJ1cmk6ZXUuZXVkaS5ldS1wb2EuMSJ9.ROGlEqqqkTvH3Jl4fxJjg5wDLS5Oog24_r8PGCJZ0d60-y37nqaKqJF1otMNJG0gPB0NSRYO-PXmGupD-bJzSw~WyJCTTZxTERzbngzWi1teTVfYUsybkJnIiwiYXR0b3JuZXlfZnVsbF9uYW1lIiwiQm9iIl0~WyJzSi1JeUpHdUMzeC1DbHYybXg0dDh3IiwiY29tcGFueV9zdGF0dXRvcnlfZnVsbF9uYW1lIiwiQWNtZSBMb2dpc3RpY3MgR21iSCJd~WyI4MHI4eEw2UGlTNnpjV0tocnkweEtnIiwiZXVpZF9yZWZlcmVuY2UiLCJERVRFU1QuSFJCOTAwMDAxIl0~WyI3YmhVMndES1V4ZGlPRGo2LW5JX1p3IiwiUmVnaXN0cmF0aW9uIGFuZCBjbG9zdXJlIG9mIGJyYW5jaGVzIG9mIHRoZSBDb21wYW55Il0~WyJlVElaU1pFMElJdUF6YWVnSHZ5ZVNBIiwiUHVyY2hhc2Ugb3JkZXJzIGZvciBvcGVyYXRpbmcgc3VwcGxpZXMgdXAgdG8gRVVSIDUwMDAgcGVyIG9yZGVyIl0~WyJJV2wzRWJFdU9tNHRBeVpKZmhIOWJnIiwic2NvcGVfb2ZfcmVwcmVzZW50YXRpb25fcG93ZXJzIixbeyIuLi4iOiJXdjd2d0Z1VFlxRlVQRURYWVFia0p4aU43RGxBQ2pVdG1RbWkyZXFTWUc4In0seyIuLi4iOiJOZXNtbDNFaXJ0S1FkUU5qaEVPNU5CNXFSVXNIdEwzaXJ2eGJNYW83VHN3In1dXQ~~eyJhbGciOiJFUzI1NiIsInR5cCI6ImtiLXNkLWp3dCtrYiJ9.eyJfc2RfYWxnIjoic2hhLTI1NiIsImF1ZCI6InJlZGlyZWN0X3VyaTpodHRwczovL2J1c2luZXNzLmV4YW1wbGUvYWdlbnRzL2FnZW50L3Jlc3BvbnNlL2dvbGRlbiIsImRlbGVnYXRlX3BheWxvYWQiOlt7Ii4uLiI6IlVCUzg3Wmt3c0kzajNDc2Q2c09BS3VBSnc2MXdoR3ZQZ2dfZldYYlgwSEUifV0sImlhdCI6MTc5NDU3MTIwMCwibm9uY2UiOiJiV0Z1WkdGMFpTMXViMjVqWlEiLCJzZF9oYXNoIjoiMmdlcWtSZ3pYSG1udzhoUHJJRWt1YVdXa3pfTk1ld1plVjhVNEdmTmRlcyIsInRyYW5zYWN0aW9uX2RhdGFfaGFzaGVzIjpbImxkSWc5NWRtUUh0TzNfVExOODJtRXRFc09UYnBDOU9DNXZha3dxbVd1VlEiXX0.vNyj0A-o5_6fPPv_03oEaMwnLScF4L0q2Q6h6B88uidDmoU5igGR1tDV1qHpLlLFiWi3oQZpLshXpka5vm0sqQ~WyI1c1RBc1ZIR3pjV1luT2p6VzBJdzRBIix7ImFnZW50Ijp7ImlkIjoidXJuOmV1ZGktdGVzdDphZ2VudDpwcm9jdXJlbWVudC0xIiwibmFtZSI6IlByb2N1cmVtZW50IGFnZW50Iiwib3BlcmF0b3IiOiJBY21lIExvZ2lzdGljcyBHbWJIIn0sImNuZiI6eyJqd2siOnsia3R5IjoiRUMiLCJjcnYiOiJQLTI1NiIsIngiOiJZME1nbU9aaHM4RG95LXI0eVFfdkZUMFFBTzkxbTk4eUtNUWJROS04VVFBIiwieSI6IjFvOFktWk9EZHhUNTA2UXdpTXg1ZXUxajBkY3NpX2Z6OWhCUUc3Tkc0R00ifX0sImV4cCI6MTc5NDU3NDgwMCwiaWF0IjoxNzk0NTcxMjAwLCJtYW5kYXRlIjp7ImFjdGlvbnMiOlsib3JkZXIuY3JlYXRlIl0sImF1ZGllbmNlcyI6W3siLi4uIjoiSGJpOFM3SzRTZUhDaXFDUjhjRFNyc1VVYXZJMTh2OVNwdXVCbW53amx6WSJ9LHsiLi4uIjoiaGpMUWRuT3NUd1hJU0VJb3daUmJLMmQ5VS00T0dlUUNzMjVxWXVJODhIayJ9XSwibGltaXQiOnsiYW1vdW50IjoiNTAwMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0sInB1cnBvc2UiOiJPcmRlciBwYWNrYWdpbmcgbWF0ZXJpYWwifSwidmN0IjoidXJuOmV1ZGktdGVzdDpidXNpbmVzczphZ2VudC1tYW5kYXRlOjEifV0~WyJZNlpydW1wV2g4cm1lM0lNVXRCclFBIiwicmVkaXJlY3RfdXJpOmh0dHBzOi8vYnVzaW5lc3MuZXhhbXBsZS9hZ2VudHMvdmVyaWZpZXIvYm9sdC9yZXNwb25zZSJd~eyJhbGciOiJFUzI1NiIsInR5cCI6ImtiK2p3dCJ9.eyJhdWQiOiJyZWRpcmVjdF91cmk6aHR0cHM6Ly9idXNpbmVzcy5leGFtcGxlL2FnZW50cy92ZXJpZmllci9ib2x0L3Jlc3BvbnNlIiwiaWF0IjoxNzk0NTcxMzAwLCJub25jZSI6ImRtVnlhV1pwWlhJdGJtOXVZMlUiLCJzZF9oYXNoIjoiRkV6ekI0UkxHQ2ZqdWxLSnYtR01zQlJNU2JzU2hCRW1VWTh3OEp2SjFWRSJ9.DhJaqg9w54nX8F_S13g2RzZH1_DJ7-Zsl8dWO3pQ1xVJaGvYg3zylZ-v-4CHckbKg17PJXXlstdTtlAbfuDN6g",
+  "keys": {
+    "issuer": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "6xMGJcKhjpGCft3Sa1gV_G-TFmAa7iCfMr2ZUQ8psJg",
+      "y": "ikIZpZ6XNpouA5Y9--lCw1oRl4L8y5Rnq3imhHRk2x0"
+    },
+    "holder": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "vtQorPVJh3ijuSfSRY15vbUXV2DzHq4bCmTIRKks__0",
+      "y": "mEH_YO1YNqZmnvTkykWuIC9ljl8m2M_O38bY2XKZMhg"
+    },
+    "agent": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "Y0MgmOZhs8Doy-r4yQ_vFT0QAO91m98yKMQbQ9-8UQA",
+      "y": "1o8Y-ZODdxT506QwiMx5eu1j0dcsi_fz9hBQG7NG4GM"
+    }
+  },
+  "verifier": {
+    "audience": "redirect_uri:https://business.example/agents/verifier/bolt/response",
+    "nonce": "dmVyaWZpZXItbm9uY2U",
+    "time": 1794571300
+  },
+  "expected": {
+    "valid": true,
+    "links": [
+      {
+        "kind": "credential",
+        "key_thumbprint": "Y0kwDjy2BhsQazAtRCwaEiak_A-xpA4RT2zzZVQzyvc",
+        "checks": {
+          "credential_validity": "pass",
+          "disclosures": "pass",
+          "holder_key": "pass",
+          "issuer_signature": "pass",
+          "issuer_trusted": "pass",
+          "status": "skipped"
+        }
+      },
+      {
+        "kind": "mandate",
+        "key_thumbprint": "SVjnOrOuBep_SA4f0mio9Puw-iv5dQ-N840jOloUChA",
+        "checks": {
+          "agent_key": "pass",
+          "delegate_disclosures": "pass",
+          "holder_signature": "pass",
+          "kb_sd_jwt_iat": "pass",
+          "kb_sd_jwt_sd_hash": "pass",
+          "kb_sd_jwt_typ": "pass",
+          "mandate_validity": "pass",
+          "one_delegate_payload": "pass"
+        }
+      },
+      {
+        "kind": "presentation",
+        "key_thumbprint": "_I5BP__3T_9aEPUHlnObwwR4ckJThyelP8ykA5kBAaA",
+        "checks": {
+          "agent_signature": "pass",
+          "audience": "pass",
+          "issued_at": "pass",
+          "kb_jwt_sd_hash": "pass",
+          "kb_jwt_typ": "pass",
+          "nonce": "pass"
+        }
+      }
+    ],
+    "credential": {
+      "attorney_full_name": "Bob",
+      "cnf": {
+        "jwk": {
+          "crv": "P-256",
+          "kty": "EC",
+          "x": "vtQorPVJh3ijuSfSRY15vbUXV2DzHq4bCmTIRKks__0",
+          "y": "mEH_YO1YNqZmnvTkykWuIC9ljl8m2M_O38bY2XKZMhg"
+        }
+      },
+      "company_statutory_full_name": "Acme Logistics GmbH",
+      "euid_reference": "DETEST.HRB900001",
+      "exp": 1826107200,
+      "iat": 1794484800,
+      "iss": "https://wallet.example",
+      "nbf": 1794484800,
+      "scope_of_representation_powers": [
+        "Registration and closure of branches of the Company",
+        "Purchase orders for operating supplies up to EUR 5000 per order"
+      ],
+      "vct": "uri:eu.eudi.eu-poa.1"
+    },
+    "mandate": {
+      "vct": "urn:eudi-test:business:agent-mandate:1",
+      "issued_at": "2026-11-13T12:00:00Z",
+      "expires": "2026-11-13T13:00:00Z",
+      "agent_key": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "Y0MgmOZhs8Doy-r4yQ_vFT0QAO91m98yKMQbQ9-8UQA",
+        "y": "1o8Y-ZODdxT506QwiMx5eu1j0dcsi_fz9hBQG7NG4GM"
+      },
+      "agent": {
+        "id": "urn:eudi-test:agent:procurement-1",
+        "name": "Procurement agent",
+        "operator": "Acme Logistics GmbH"
+      },
+      "purpose": "Order packaging material",
+      "actions": [
+        "order.create"
+      ],
+      "limit": {
+        "amount": "5000.00",
+        "currency": "EUR"
+      },
+      "audiences": [
+        "redirect_uri:https://business.example/agents/verifier/bolt/response"
+      ]
+    }
+  }
+}
